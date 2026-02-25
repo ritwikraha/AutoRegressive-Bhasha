@@ -75,5 +75,57 @@ Verified that SAE Feature 9994 strictly maps to reasoning. Proved mathematically
 
 ---
 
-**Note to self:**  
+### 4. [Verifier-RL: GRPO with Verifiable Math Rewards](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/experiments/verifier_rl_grpo_math.ipynb)
+
+- **Date:** 2026-02-25
+- **Status:** Ready to run
+
+- **Premise:**
+Can Qwen3-0.6B learn to reason about math through RL using only a symbolic verifier (regex + exact match) as the reward signal — no learned reward model, no human preferences? Trained with `/no_think` to isolate the RL signal from Qwen3's built-in thinking scaffolding.
+
+- **Math:**
+Group Relative Policy Optimization (GRPO) computes advantages within a group of $G$ sampled completions per prompt:
+
+$$
+\hat{A}_i = \frac{r_i - \text{mean}(\{r_j\}_{j=1}^{G})}{\text{std}(\{r_j\}_{j=1}^{G})}
+$$
+
+Reward is binary correctness from a symbolic verifier plus a soft format bonus:
+
+$$
+r(y) = \mathbb{1}[\text{extract}(y) = \text{truth}] + 0.1 \cdot \mathbb{1}[\texttt{\backslash boxed\{\}} \in y]
+$$
+
+- **Setup:**
+Base: Qwen3-0.6B (`/no_think` mode). Task: GSM8K. Algorithm: GRPO via TRL. 250 steps, group size 4, KL $\beta = 0.04$.
+
+- **Research Questions:**
+Does verifier-RL outperform SFT? Is GRPO stable without a critic? Does reward hacking emerge with unhackable rewards?
+
+---
+
+### 5. [Reasoning Depth Metric: Token-Level Measurement of LLM Thought Quality](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/experiments/reasoning_depth_metric.ipynb)
+
+- **Date:** 2026-02-25
+- **Status:** Ready to run
+
+- **Premise:**
+Accuracy conflates "the model knew the answer" with "the model figured it out". Can we build a decomposable metric that measures reasoning quality along five dimensions: logical chaining, branching, self-correction, decomposition, and verification?
+
+- **Math:**
+The Reasoning Depth Score (RDS) decomposes reasoning into weighted, length-normalized, log-scaled dimension counts:
+
+$$
+\text{RDS}(y) = \sum_{d \in \mathcal{D}} w_d \cdot \frac{\text{count}_d(y)}{\text{len}(y)} \cdot \log(1 + \text{count}_d(y))
+$$
+
+- **Setup:**
+Models: Qwen3-0.6B, Qwen3-1.7B, Gemma-3-1B-IT (+ optional Qwen3.5-35B-A3B MoE). All Qwen3 models tested with `/no_think`. Dataset: GSM8K test (150 problems). Pure inference — no training.
+
+- **Research Questions:**
+Does depth correlate with accuracy? Do larger models reason deeper or just wider? Which reasoning dimensions predict correctness most strongly? Can RDS serve as a process reward for RL?
+
+---
+
+**Note to self:**
 Drop notebooks here. Update the log. If there is no log, there is no experiment.
