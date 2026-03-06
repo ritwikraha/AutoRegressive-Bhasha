@@ -4,15 +4,15 @@ A parking lot for wild ideas, half-baked runs, and "dayumn bruh.." moments.
 
 ## Logs
 
-### 1. [Gemma-3-1B-IT CoT Steering (CAA)](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/experiments/steering_gemma3_cot.ipynb)
+### 1. [Gemma-3-1B-IT CoT Steering (CAA)](steering_gemma3_cot.ipynb)
 
-- **Date:** 2026-02-23  
-- **Status:** Completed  
+- **Date:** 2026-02-23
+- **Status:** Completed
 
-- **Premise:**  
+- **Premise:**
 Can we induce step-by-step Chain-of-Thought (CoT) reasoning at inference time without modifying model weights by perturbing the latent trajectory?
 
-- **Math:**  
+- **Math:**
 Extracted a dense steering vector via contrastive activation addition (CAA) at the midpoint layer:
 
 $$
@@ -25,23 +25,23 @@ $$
 \tilde{h}_{13} = h_{13} + \alpha \vec{v}_{\mathrm{caa}}
 $$
 
-- **Tested:**  
+- **Tested:**
 Swept intervention strength $\alpha \in \{0, 5, 10, 20, 35\}$ on algebra word problems.
 
-- **Verified:**  
+- **Verified:**
 Successfully shifted the behavioral policy from blunt answers to verbose logical breakdowns. Verified that the optimal alignment zone is around $\alpha = 15$, and proved that a static $\alpha > 35$ pushes activations off the natural manifold, resulting in catastrophic collapse (gibberish).
 
 ---
 
-### 2. [Gemma-3-1B-IT Dynamic SAE Steering (V2)](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/experiments/gemma3_sae_dynamic_steering_v2.ipynb)
+### 2. [Gemma-3-1B-IT Dynamic SAE Steering (V2)](gemma3_sae_dynamic_steering_v2.ipynb)
 
-- **Date:** 2026-02-24  
-- **Status:** Completed  
+- **Date:** 2026-02-24
+- **Status:** Completed
 
-- **Premise:**  
+- **Premise:**
 CAA vectors are noisy and polysemantic. Can we isolate a pure, monosemantic reasoning feature using a Sparse Autoencoder (SAE) and implement a dynamic, closed-loop controller to prevent the manifold collapse observed in V1?
 
-- **Math:**  
+- **Math:**
 
 Discovered the active feature by projecting the empirical CAA vector onto the SAE encoder:
 
@@ -67,15 +67,15 @@ $$
 \tilde{h}_{13,t} = h_{13,t} + \alpha_t \vec{f}_{\mathrm{reason}}
 $$
 
-- **Tested:**  
+- **Tested:**
 Compared unsteered vs. steered trajectories using dynamic $\alpha_{base} = 60.0$ and mapped the high-dimensional latent states to a 2D plane via PCA.
 
-- **Verified:**  
+- **Verified:**
 Verified that SAE Feature 9994 strictly maps to reasoning. Proved mathematically and visually that dynamic $\tau$-scaling preserves the structural integrity of the latent manifold while achieving a permanent, deterministic behavioral bifurcation at the logit threshold.
 
 ---
 
-### 4. [Verifier-RL: GRPO with Verifiable Math Rewards](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/experiments/verifier_rl_grpo_math.ipynb)
+### 4. [Verifier-RL: GRPO with Verifiable Math Rewards](verifier_rl_grpo_math.ipynb)
 
 - **Date:** 2026-02-25
 - **Status:** Ready to run
@@ -104,7 +104,7 @@ Does verifier-RL outperform SFT? Is GRPO stable without a critic? Does reward ha
 
 ---
 
-### 5. [Reasoning Depth Metric: Token-Level Measurement of LLM Thought Quality](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/experiments/reasoning_depth_metric.ipynb)
+### 5. [Reasoning Depth Metric: Token-Level Measurement of LLM Thought Quality](reasoning_depth_metric.ipynb)
 
 - **Date:** 2026-02-25
 - **Status:** Ready to run
