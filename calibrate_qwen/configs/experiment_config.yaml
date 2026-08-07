@@ -1,0 +1,60 @@
+seed: 42
+
+dataset:
+  repo_id: ritwikraha/calibrate-qwen-curated
+  train_config: calibrated_mcq
+  phase1_config: phase1_2000
+  teacher_config: teacher_phase1
+  robustness_config: option_shuffled
+
+models:
+  student: Qwen/Qwen3.5-4B
+  teacher: Qwen/Qwen3.5-9B
+  renderer: qwen3_5_disable_thinking
+
+structured_output:
+  confidence_format: numeric
+  abstention_threshold: 0.60
+  max_tokens: 192
+
+sft:
+  learning_rate: 0.0002
+  batch_size: 32
+  max_length: 1024
+  num_epochs: 1
+  lora_rank: 32
+  test_size: 100
+  save_every: 20
+  eval_every: 10
+
+off_policy:
+  learning_rate: 0.0001
+  batch_size: 16
+  max_length: 1024
+  lora_rank: 32
+  n_teacher_targets: 20
+  teacher_concurrency: 16
+  save_every: 10
+  eval_every: 10
+
+on_policy:
+  learning_rate: 0.0001
+  groups_per_batch: 16
+  group_size: 2
+  max_examples: 4000
+  max_prompt_tokens: 1024
+  max_tokens: 192
+  temperature: 1.0
+  lora_rank: 32
+  kl_penalty_coef: 1.0
+  kl_discount_factor: 0.0
+  num_substeps: 1
+  save_every: 10
+  eval_every: 10
+
+evaluation:
+  bins: 10
+  thresholds: [0.50, 0.60, 0.70, 0.80, 0.90]
+  sampling_temperature: 0.20
+  score_options: true
+  concurrency: 8

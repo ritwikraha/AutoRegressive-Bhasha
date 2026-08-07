@@ -1,0 +1,10 @@
+artifacts/
+.venv/
+.venv311/
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+results/*
+!results/README.md

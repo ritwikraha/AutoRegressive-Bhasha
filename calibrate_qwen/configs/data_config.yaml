@@ -1,0 +1,62 @@
+seed: 42
+output_dir: artifacts/base
+
+# These fractions are applied after combining and deduplicating enabled sources.
+splits:
+  train: 0.80
+  validation: 0.10
+  # Test receives the remainder: 0.10.
+
+curation:
+  output_dir: artifacts/curated
+
+  # Quality filters applied after source normalization.
+  min_choices: 2
+  max_choices: 6
+  min_question_chars: 8
+  max_question_chars: 2500
+  max_choice_chars: 600
+  max_prompt_chars: 8000
+  drop_duplicate_choices: true
+  drop_duplicate_questions_across_splits: true
+  blocked_question_patterns: []
+
+  # Keep null for full curated splits. For a first Tinker pass, override these
+  # from the CLI, e.g. --train-limit 4000 --balance-sources.
+  split_limits:
+    train: null
+    validation: null
+    test: null
+  source_limits: {}
+  balance_sources: false
+
+sources:
+  - name: arc_challenge
+    dataset: allenai/ai2_arc
+    subset: ARC-Challenge
+    split: train
+    max_examples: null
+    enabled: true
+
+  - name: openbookqa
+    dataset: allenai/openbookqa
+    subset: main
+    split: train
+    max_examples: null
+    enabled: true
+
+  - name: commonsenseqa
+    dataset: tau/commonsense_qa
+    subset: null
+    split: train
+    max_examples: 5000
+    enabled: true
+
+  # MMLU is disabled initially because loading all subjects expands the scope.
+  # Enable it after confirming the first three adapters and the training loop.
+  - name: mmlu
+    dataset: cais/mmlu
+    subset: all
+    split: auxiliary_train
+    max_examples: 5000
+    enabled: false
