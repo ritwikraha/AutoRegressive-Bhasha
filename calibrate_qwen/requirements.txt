@@ -7,5 +7,5 @@ pyarrow>=16.0.0
 pytest>=8.0.0
 pyyaml>=6.0.1
 tqdm>=4.66.0
-tinker==0.24.0
-tinker-cookbook==0.5.3
+tinker>=0.24.0
+tinker-cookbook>=0.5.3
