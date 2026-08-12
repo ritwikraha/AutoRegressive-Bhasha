@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable, Literal
 
 from datasets import load_dataset
+from huggingface_hub import HfApi
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -25,18 +26,35 @@ from training.common import (
 Variant = Literal["hard_label", "teacher"]
 
 
+def assert_hub_dataset_access(repo_id: str, token: str | None) -> None:
+    if not token:
+        raise EnvironmentError(
+            "HF_TOKEN is empty. Add it to Colab Secrets and enable notebook access."
+        )
+    try:
+        HfApi(token=token).repo_info(repo_id=repo_id, repo_type="dataset")
+    except Exception as error:
+        raise RuntimeError(
+            f"Cannot access the private dataset {repo_id}. Refresh the HF_TOKEN Colab secret, "
+            "enable notebook access for that secret, and rerun the authentication cell."
+        ) from error
+
+
 def load_training_records(
     *,
     repo_id: str,
     variant: Variant,
     limit: int | None = None,
+    hf_token: str | None = None,
 ) -> list[dict[str, Any]]:
+    token = (hf_token or optional_hf_token() or "").strip()
+    assert_hub_dataset_access(repo_id, token)
     config_name = "phase1_2000" if variant == "hard_label" else "teacher_phase1"
     dataset = load_dataset(
         repo_id,
         config_name,
         split="train",
-        token=optional_hf_token(),
+        token=token,
     )
     if limit is not None:
         dataset = dataset.select(range(min(limit, len(dataset))))
@@ -83,12 +101,18 @@ def prepare_training_file(
     confidence_format: ConfidenceFormat = "numeric",
     abstention_threshold: float = 0.6,
     limit: int | None = None,
+    hf_token: str | None = None,
     records: Iterable[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     loaded = (
         list(records)
         if records is not None
-        else load_training_records(repo_id=repo_id, variant=variant, limit=limit)
+        else load_training_records(
+            repo_id=repo_id,
+            variant=variant,
+            limit=limit,
+            hf_token=hf_token,
+        )
     )
     conversations: list[dict[str, Any]] = []
     skipped = Counter()
