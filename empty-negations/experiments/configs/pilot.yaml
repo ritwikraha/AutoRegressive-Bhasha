@@ -1,0 +1,39 @@
+name: ocn_pilot
+description: Local-first pilot for measuring overgeneralized contrastive negation.
+prompt_file: data/prompts/pilot_prompts.csv
+output_file: data/raw/generations_pilot.csv
+detection_file: data/processed/generations_pilot_detection.csv
+
+generation:
+  samples_per_prompt: 3
+  max_new_tokens: 180
+  decoding:
+    - name: greedy
+      temperature: 0.0
+      top_p: 1.0
+    - name: low_temp
+      temperature: 0.2
+      top_p: 0.95
+    - name: normal_temp
+      temperature: 0.7
+      top_p: 0.95
+
+models:
+  - id: qwen-small-base
+    family: qwen
+    stage: base
+    backend: placeholder
+  - id: qwen-small-instruct
+    family: qwen
+    stage: instruct
+    backend: placeholder
+
+analysis:
+  group_columns:
+    - model
+    - stage
+    - category
+    - variant
+    - decoding
+  text_column: response
+  bootstrap_iterations: 1000

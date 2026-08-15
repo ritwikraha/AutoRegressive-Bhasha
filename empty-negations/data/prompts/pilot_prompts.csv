@@ -1,0 +1,49 @@
+prompt_id,topic,category,variant,contrast_availability,prompt
+p001,photosynthesis,factual_explanation,neutral,no_misconception,Explain photosynthesis in one paragraph.
+p002,photosynthesis,factual_explanation,brief,no_misconception,Briefly explain photosynthesis.
+p003,photosynthesis,factual_explanation,plain,no_misconception,Explain photosynthesis using plain factual language. Avoid rhetorical framing.
+p004,photosynthesis,factual_explanation,explicit_misconception,explicit_misconception,Someone says photosynthesis is only about plants eating sunlight. Explain what is wrong with that.
+p005,printing_press,historical_significance,neutral,no_misconception,Why was the printing press important?
+p006,printing_press,historical_significance,nuanced,no_misconception,Give a deep and nuanced explanation of why the printing press mattered.
+p007,printing_press,historical_significance,plain,no_misconception,Explain the importance of the printing press in direct factual sentences.
+p008,printing_press,historical_significance,explicit_misconception,explicit_misconception,Was the printing press only a faster copying device? Explain.
+p009,leadership,concept_definition,neutral,no_misconception,What is leadership?
+p010,leadership,concept_definition,nuanced,no_misconception,Explain the deeper meaning of leadership.
+p011,leadership,concept_definition,brief,no_misconception,Define leadership in two sentences.
+p012,leadership,concept_definition,prohibit,no_misconception,Define leadership without using not just not only merely simply or goes beyond.
+p013,career_uncertainty,personal_advice,neutral,no_misconception,How should someone handle career uncertainty?
+p014,career_uncertainty,personal_advice,nuanced,no_misconception,Give thoughtful advice for someone facing career uncertainty.
+p015,career_uncertainty,personal_advice,plain,no_misconception,Give practical career uncertainty advice in plain direct language.
+p016,budgeting_app,product_description,neutral,no_misconception,Describe the value of a budgeting app.
+p017,budgeting_app,product_description,marketing,no_misconception,Write polished marketing copy for a budgeting app.
+p018,budgeting_app,product_description,technical,no_misconception,Describe a budgeting app for a technical product brief.
+p019,great_gatsby_green_light,literary_analysis,neutral,no_misconception,What does the green light represent in The Great Gatsby?
+p020,great_gatsby_green_light,literary_analysis,nuanced,no_misconception,Give a nuanced interpretation of the green light in The Great Gatsby.
+p021,great_gatsby_green_light,literary_analysis,plain,no_misconception,Explain the green light in The Great Gatsby in plain language.
+p022,crispr,scientific_interpretation,neutral,no_misconception,Why is CRISPR important?
+p023,crispr,scientific_interpretation,brief,no_misconception,Briefly explain why CRISPR matters.
+p024,crispr,scientific_interpretation,explicit_misconception,explicit_misconception,Someone says CRISPR is simply a pair of molecular scissors. Explain what that description misses.
+p025,process_improvement,business_writing,neutral,no_misconception,Explain the impact of a process improvement.
+p026,process_improvement,business_writing,executive,no_misconception,Explain the impact of a process improvement for an executive audience.
+p027,process_improvement,business_writing,plain,no_misconception,Explain a process improvement with short direct sentences.
+p028,sincere_apology,moral_question,neutral,no_misconception,What makes an apology sincere?
+p029,sincere_apology,moral_question,nuanced,no_misconception,Explain what makes an apology sincere in a thoughtful way.
+p030,sincere_apology,moral_question,prohibit,no_misconception,Explain what makes an apology sincere without invented contrasts.
+p031,router_reset,procedural,neutral,no_misconception,Explain how to reset a router.
+p032,router_reset,procedural,brief,no_misconception,Briefly explain how to reset a router.
+p033,router_reset,procedural,plain,no_misconception,Give direct step-by-step router reset instructions.
+p034,cities,creative_writing,neutral,no_misconception,Write an introduction about cities.
+p035,cities,creative_writing,nuanced,no_misconception,Write a compelling and reflective introduction about cities.
+p036,cities,creative_writing,plain,no_misconception,Write a simple factual introduction about cities.
+p037,climate_policy,moral_question,neutral,no_misconception,Why does climate policy matter?
+p038,climate_policy,moral_question,explicit_misconception,explicit_misconception,Someone claims climate policy is only about restricting economic growth. Respond.
+p039,data_privacy,business_writing,neutral,no_misconception,Explain why data privacy matters for a company.
+p040,data_privacy,business_writing,nuanced,no_misconception,Explain the strategic significance of data privacy for a company.
+p041,virus,scientific_interpretation,legitimate_pedagogy,common_misconception,Explain what a virus is.
+p042,virus,scientific_interpretation,explicit_misconception,explicit_misconception,Someone says a virus is a kind of cell. Explain the correction.
+p043,democracy,concept_definition,neutral,no_misconception,What is democracy?
+p044,democracy,concept_definition,nuanced,no_misconception,Explain the deeper significance of democracy.
+p045,api_design,technical_documentation,neutral,no_misconception,Explain why API design matters.
+p046,api_design,technical_documentation,plain,no_misconception,Explain why API design matters in direct technical language.
+p047,remote_work,business_writing,neutral,no_misconception,Explain the impact of remote work on organizations.
+p048,remote_work,business_writing,nuanced,no_misconception,Give a nuanced explanation of the organizational impact of remote work.

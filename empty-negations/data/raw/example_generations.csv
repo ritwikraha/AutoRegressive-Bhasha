@@ -1,0 +1,5 @@
+prompt_id,model,stage,temperature,seed,category,variant,prompt,response
+p001,example-model,instruct,0.7,1,factual_explanation,neutral,Explain photosynthesis in one paragraph.,Photosynthesis lets plants convert light energy into chemical energy. Chlorophyll captures light and helps convert carbon dioxide and water into glucose and oxygen.
+p005,example-model,instruct,0.7,1,historical_significance,nuanced,Why was the printing press important?,The printing press was not just a faster way to copy books; it changed who could access knowledge and how ideas moved across Europe.
+p009,example-model,instruct,0.7,1,concept_definition,neutral,What is leadership?,Leadership is not merely about leading people; it is about guiding them toward a shared goal.
+p031,example-model,instruct,0.7,1,procedural,plain,Give direct step-by-step router reset instructions.,Unplug the router wait thirty seconds plug it back in and wait until the status lights stabilize.

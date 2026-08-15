@@ -1,0 +1,27 @@
+name: ocn_reward_pairs
+description: Matched response variants for reward-model, LLM-judge, and human evaluation.
+
+variant_types:
+  - plain
+  - justified_ocn
+  - empty_ocn
+  - explicit_genuine_contrast
+
+judge_dimensions:
+  - correctness
+  - clarity
+  - depth
+  - naturalness
+  - professionalism
+  - overall_preference
+
+controls:
+  match_facts: true
+  approximate_length_tokens: true
+  same_number_of_propositions: true
+  randomize_order: true
+  blind_variant_labels: true
+
+outputs:
+  pair_table: data/processed/reward_pairs.csv
+  judge_table: data/processed/reward_judgments.csv

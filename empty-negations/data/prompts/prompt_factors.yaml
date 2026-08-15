@@ -1,0 +1,38 @@
+categories:
+  - factual_explanation
+  - historical_significance
+  - concept_definition
+  - personal_advice
+  - product_description
+  - literary_analysis
+  - scientific_interpretation
+  - business_writing
+  - moral_question
+  - procedural
+  - creative_writing
+  - technical_documentation
+
+variants:
+  neutral: "Answer naturally."
+  brief: "Answer briefly."
+  comprehensive: "Give a comprehensive answer."
+  nuanced: "Give a deep and nuanced answer."
+  plain: "Use plain factual language and avoid rhetorical framing."
+  prohibit_ocn: "Do not use contrastive frames such as not just, not only, merely, simply, or goes beyond."
+  explicit_misconception: "The prompt explicitly gives a misconception to correct."
+  article_continuation: "Continue as article prose rather than assistant answer."
+
+personas:
+  - assistant
+  - encyclopedia
+  - technical_manual
+  - court_transcript
+  - terse_analyst
+  - casual_human
+  - marketing_copywriter
+
+length_targets:
+  - 30
+  - 75
+  - 150
+  - 300

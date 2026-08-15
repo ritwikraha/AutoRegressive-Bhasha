@@ -1,0 +1,30 @@
+{
+  "fields": [
+    {"name": "example_id", "type": "string", "required": true},
+    {"name": "prompt", "type": "string", "required": true},
+    {"name": "response", "type": "string", "required": true},
+    {"name": "span_text", "type": "string", "required": true},
+    {"name": "rejected_x", "type": "string", "required": false},
+    {"name": "asserted_y", "type": "string", "required": false},
+    {"name": "taxonomy_label", "type": "category", "required": true},
+    {"name": "prompt_support", "type": "integer", "minimum": 1, "maximum": 5},
+    {"name": "common_misconception", "type": "integer", "minimum": 1, "maximum": 5},
+    {"name": "x_y_distinctness", "type": "integer", "minimum": 1, "maximum": 5},
+    {"name": "negation_adds_meaning", "type": "integer", "minimum": 1, "maximum": 5},
+    {"name": "straw_position", "type": "integer", "minimum": 1, "maximum": 5},
+    {"name": "formulaic_ai_style", "type": "integer", "minimum": 1, "maximum": 5},
+    {"name": "rewrite_loss", "type": "integer", "minimum": 1, "maximum": 5},
+    {"name": "notes", "type": "string", "required": false}
+  ],
+  "taxonomy_labels": [
+    "genuine_contrast",
+    "legitimate_pedagogy",
+    "presupposed_contrast",
+    "empty_intensification",
+    "scope_inflation",
+    "false_correction",
+    "template_stacking",
+    "non_ocn_negation",
+    "unclear"
+  ]
+}

@@ -1,0 +1,11 @@
+__pycache__/
+.pytest_cache/
+.venv/
+.ipynb_checkpoints/
+
+data/raw/generations_*.csv
+data/raw/generations_*.jsonl
+data/processed/*.csv
+data/processed/*.jsonl
+reports/figures/*.png
+reports/figures/*.pdf
