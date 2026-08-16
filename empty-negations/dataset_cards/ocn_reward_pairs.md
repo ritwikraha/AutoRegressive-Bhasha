@@ -37,6 +37,12 @@ Published pairs satisfy all of the following:
 
 Score variants on correctness, clarity, depth, naturalness, professionalism, and overall preference. Pair-aware analysis should cluster or condition on `pair_id`.
 
+## Main Run
+
+The main run considered 593 unique lexical OCN responses from 9,504 generations. The quality pipeline accepted 472 counterfactual pairs (944 rows), an acceptance rate of 79.6%, with perfect lexical detector separation between published variants.
+
+Generation and quality diagnostics are logged in the [W&B run](https://wandb.ai/ritwik/ocn-empty-negations/runs/e4dbzt96).
+
 ## Limitations
 
 `has_ocn` is lexical candidate detection, not a semantic judgment that every source is an empty or unjustified contrast. Rewrites are generated rather than human-authored, and the token-overlap filter cannot guarantee exact proposition preservation. Manually audit a stratified sample before paper-grade reward, judge, or human evaluation.
