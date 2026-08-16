@@ -26,6 +26,7 @@ This dataset contains open-source model generations for prompts designed to elic
 - `gpu_name`: accelerator used for generation;
 - `precision`: model loading precision;
 - `model_revision`: resolved Hugging Face model commit when available.
+- `inference_batching`: prompt batching method used for generation.
 
 ## Intended Use
 
@@ -33,4 +34,4 @@ Use this dataset to estimate OCN rates by model family, post-training stage, pro
 
 ## Limitations
 
-Generation settings, model revisions, and runtime hardware can affect outputs. The main Gemma 4/Qwen 3.5 run records these fields per row and uses unquantized BF16 weights.
+Generation settings, model revisions, runtime hardware, and inference batching can affect outputs. The main Gemma 4/Qwen 3.5 run records these fields per row, uses unquantized BF16 weights, and batches up to 24 prompts per generation call. Greedy outputs are deterministic, so the same generated output is reused for both seed-labelled greedy rows.

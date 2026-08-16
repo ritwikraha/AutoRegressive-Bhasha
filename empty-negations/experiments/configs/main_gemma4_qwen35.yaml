@@ -35,5 +35,7 @@ precision: bfloat16
 quantize_4bit: false
 thinking: false
 prompt_batch_size: 24
+inference_batching: prompt_batch_up_to_24
+greedy_seed_reuse: true
 required_gpu: NVIDIA A100
 expected_rows: 9504

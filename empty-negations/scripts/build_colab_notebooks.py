@@ -337,6 +337,8 @@ def generation_notebook() -> list[dict]:
                 "prompt_count": len(prompts),
                 "expected_rows": EXPECTED_ROWS,
                 "prompt_batch_size": PROMPT_BATCH_SIZE,
+                "inference_batching": "prompt_batch_up_to_24",
+                "greedy_seed_reuse": True,
             }
             run = login_wandb(
                 project="ocn-empty-negations",
@@ -444,6 +446,7 @@ def generation_notebook() -> list[dict]:
                         new_rows["gpu_name"] = GPU_NAME
                         new_rows["precision"] = "bfloat16"
                         new_rows["model_revision"] = model_revision
+                        new_rows["inference_batching"] = "prompt_batch_up_to_24"
                         part = pd.concat([part, new_rows], ignore_index=True).drop_duplicates(
                             ["prompt_id", "seed"], keep="last"
                         )
