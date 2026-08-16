@@ -82,6 +82,29 @@ def make_plain_rewrite_prompt(response: str) -> str:
     return f"{REWRITE_SYSTEM_INSTRUCTION}\n<response>\n{response.strip()}\n</response>"
 
 
+def make_plain_rewrite_retry_prompt(source_response: str, previous_rewrite: str) -> str:
+    """Build a stricter retry prompt after a rewrite fails quality controls."""
+    return f"""The previous draft did not satisfy the direct-affirmative rewrite requirements.
+
+Rewrite the complete source response again.
+
+Hard constraints:
+- Preserve all substantive claims, names, numbers, qualifications, and conclusions.
+- Use direct affirmative prose throughout.
+- Remove every rhetorical construction matching: not just, not only, not merely, is not just, is not only, more than just, goes beyond, rather than simply, not X alone but, far from being merely, and cannot be reduced to.
+- Do not copy a failed construction from the previous draft.
+- Do not add facts, headings, commentary, XML tags, or an explanation.
+- Return only the complete rewritten response.
+
+<source_response>
+{source_response.strip()}
+</source_response>
+
+<failed_draft>
+{previous_rewrite.strip()}
+</failed_draft>"""
+
+
 def normalize_plain_rewrite(text: str | None) -> str:
     """Remove common wrapper text without changing the generated prose."""
     value = re.sub(r"\s+", " ", (text or "").strip())
@@ -165,11 +188,8 @@ def assess_plain_rewrite(
     }
 
 
-def build_counterfactual_pair_frame(
-    rewrites: pd.DataFrame,
-    seed: int = 42,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Build long-form blinded reward pairs and return pair rows plus rewrite QA."""
+def score_plain_rewrites(rewrites: pd.DataFrame) -> pd.DataFrame:
+    """Add deterministic quality metrics to one or more rewrite attempts."""
     required = {"source_candidate_id", "response", "plain_response"}
     missing = sorted(required - set(rewrites.columns))
     if missing:
@@ -188,7 +208,54 @@ def build_counterfactual_pair_frame(
                 ),
             }
         )
-    quality = pd.DataFrame(quality_rows)
+    return pd.DataFrame(quality_rows)
+
+
+def select_best_plain_rewrites(
+    rewrites: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Choose the strongest attempt for each source while retaining full QA."""
+    quality = score_plain_rewrites(rewrites)
+    ranked = quality.assign(
+        _plain_removed=~quality["plain_has_ocn"].astype(bool),
+        _length_in_range=quality["length_ratio"].between(0.60, 1.35),
+        _length_distance=(quality["length_ratio"] - 1.0).abs(),
+    )
+    if "rewrite_attempt" not in ranked.columns:
+        ranked["rewrite_attempt"] = 1
+    ranked = ranked.sort_values(
+        [
+            "source_candidate_id",
+            "quality_pass",
+            "_plain_removed",
+            "is_distinct",
+            "_length_in_range",
+            "content_overlap",
+            "_length_distance",
+            "rewrite_attempt",
+        ],
+        ascending=[True, False, False, False, False, False, True, True],
+        kind="stable",
+    )
+    best = (
+        ranked.drop_duplicates("source_candidate_id", keep="first")
+        .drop(columns=["_plain_removed", "_length_in_range", "_length_distance"])
+        .reset_index(drop=True)
+    )
+    return best, quality
+
+
+def build_counterfactual_pair_frame(
+    rewrites: pd.DataFrame,
+    seed: int = 42,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build long-form blinded reward pairs and return pair rows plus rewrite QA."""
+    required = {"source_candidate_id", "response", "plain_response"}
+    missing = sorted(required - set(rewrites.columns))
+    if missing:
+        raise ValueError(f"Rewrite table is missing required columns: {missing}")
+
+    quality = score_plain_rewrites(rewrites)
 
     pair_rows = []
     source_detection_columns = {

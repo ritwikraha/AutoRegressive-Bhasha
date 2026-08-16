@@ -6,6 +6,7 @@ output_dataset: ritwikraha/ocn-empty-negations-reward-pairs-main-gemma4-qwen35
 rewrite_model: Qwen/Qwen3.5-2B
 required_gpu: NVIDIA L4
 quantize_4bit: true
+max_rewrite_attempts: 3
 
 variant_types:
   - candidate_ocn
@@ -33,5 +34,6 @@ outputs:
   pair_table: ocn_reward_pairs_main_gemma4_qwen35.csv
   rewrite_checkpoint: ocn_reward_pair_rewrites_main_gemma4_qwen35.csv
   quality_audit: ocn_reward_pair_rewrite_quality_main_gemma4_qwen35.csv
+  attempt_quality_audit: ocn_reward_pair_rewrite_attempt_quality_main_gemma4_qwen35.csv
   rejected_rewrites: ocn_reward_pair_rewrite_rejects_main_gemma4_qwen35.csv
   judge_table: data/processed/reward_judgments.csv

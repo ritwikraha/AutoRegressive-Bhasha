@@ -4,7 +4,9 @@ from ocn.reward_pairs import (
     assess_plain_rewrite,
     build_counterfactual_pair_frame,
     make_plain_rewrite_prompt,
+    make_plain_rewrite_retry_prompt,
     normalize_plain_rewrite,
+    select_best_plain_rewrites,
     select_unique_ocn_candidates,
 )
 
@@ -63,6 +65,10 @@ def test_plain_rewrite_prompt_and_normalization_do_not_add_wrappers():
     assert "Return only the rewritten response" in prompt
     assert normalize_plain_rewrite(f'Rewritten response: "{PLAIN_RESPONSE}"') == PLAIN_RESPONSE
 
+    retry_prompt = make_plain_rewrite_retry_prompt(SOURCE_RESPONSE, SOURCE_RESPONSE)
+    assert "previous draft did not satisfy" in retry_prompt
+    assert "Remove every rhetorical construction" in retry_prompt
+
 
 def test_assess_plain_rewrite_enforces_detector_and_content_controls():
     accepted = assess_plain_rewrite(SOURCE_RESPONSE, PLAIN_RESPONSE)
@@ -106,3 +112,28 @@ def test_build_counterfactual_pair_frame_is_blinded_and_detector_separated():
     assert pairs["pair_id"].nunique() == 1
     assert pairs.loc[pairs["variant_type"].eq("candidate_ocn"), "has_ocn"].all()
     assert not pairs.loc[pairs["variant_type"].eq("plain_rewrite"), "has_ocn"].any()
+
+
+def test_select_best_plain_rewrites_prefers_passing_retry():
+    attempts = pd.DataFrame(
+        [
+            {
+                "source_candidate_id": "abc123",
+                "response": SOURCE_RESPONSE,
+                "plain_response": SOURCE_RESPONSE,
+                "rewrite_attempt": 1,
+            },
+            {
+                "source_candidate_id": "abc123",
+                "response": SOURCE_RESPONSE,
+                "plain_response": PLAIN_RESPONSE,
+                "rewrite_attempt": 2,
+            },
+        ]
+    )
+
+    best, quality = select_best_plain_rewrites(attempts)
+
+    assert len(quality) == 2
+    assert best.loc[0, "rewrite_attempt"] == 2
+    assert best.loc[0, "quality_pass"]

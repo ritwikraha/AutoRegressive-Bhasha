@@ -21,6 +21,8 @@ The source dataset is `ritwikraha/ocn-empty-negations-detection-main-gemma4-qwen
 
 Each accepted `pair_id` has exactly two rows. `presentation_label` and `presentation_position` provide a deterministic blinded A/B order. The dataset does not contain human preference labels.
 
+Failed rewrites receive up to two stricter retry attempts. All attempts are retained in the Drive audit artifact, and the best attempt per source is selected deterministically before the publication filters are applied.
+
 ## Quality Controls
 
 Published pairs satisfy all of the following:

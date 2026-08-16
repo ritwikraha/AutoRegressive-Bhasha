@@ -636,7 +636,7 @@ def reward_pairs_notebook() -> list[dict]:
 
             from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, publish_dataframe_to_hf, save_dataframe, utc_timestamp
             from ocn.generation import DecodingSpec, generate_batch, load_text_generation_model
-            from ocn.reward_pairs import build_counterfactual_pair_frame, make_plain_rewrite_prompt, normalize_plain_rewrite, select_unique_ocn_candidates
+            from ocn.reward_pairs import build_counterfactual_pair_frame, make_plain_rewrite_prompt, make_plain_rewrite_retry_prompt, normalize_plain_rewrite, select_best_plain_rewrites, select_unique_ocn_candidates
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
@@ -655,6 +655,7 @@ def reward_pairs_notebook() -> list[dict]:
             REWRITE_BATCH_SIZE = int(os.environ.get("OCN_REWRITE_BATCH_SIZE", "12"))
             candidate_limit = int(os.environ.get("OCN_REWARD_PAIR_LIMIT", "0"))
             MAX_CANDIDATES = candidate_limit or None
+            MAX_REWRITE_ATTEMPTS = 3
             QUANTIZE_4BIT = True
 
             if not torch.cuda.is_available():
@@ -671,6 +672,7 @@ def reward_pairs_notebook() -> list[dict]:
                 "rewrite_model_id": REWRITE_MODEL_ID,
                 "rewrite_batch_size": REWRITE_BATCH_SIZE,
                 "max_candidates": MAX_CANDIDATES,
+                "max_rewrite_attempts": MAX_REWRITE_ATTEMPTS,
                 "quantize_4bit": QUANTIZE_4BIT,
                 "gpu_name": GPU_NAME,
             }
@@ -701,11 +703,29 @@ def reward_pairs_notebook() -> list[dict]:
             r"""
             checkpoint_path = Path(config["drive_data_root"]) / "ocn_reward_pair_rewrites_main_gemma4_qwen35.csv"
             if checkpoint_path.exists():
-                checkpoint = pd.read_csv(checkpoint_path).drop_duplicates("source_candidate_id", keep="last")
+                checkpoint = pd.read_csv(
+                    checkpoint_path,
+                    dtype={"source_candidate_id": str},
+                )
             else:
                 checkpoint = pd.DataFrame(
-                    columns=["source_candidate_id", "plain_response", "rewrite_model_id", "rewrite_run_id"]
+                    columns=[
+                        "source_candidate_id",
+                        "plain_response",
+                        "rewrite_model_id",
+                        "rewrite_run_id",
+                        "rewrite_attempt",
+                        "rewrite_prompt_version",
+                    ]
                 )
+            if "rewrite_attempt" not in checkpoint.columns:
+                checkpoint["rewrite_attempt"] = 1
+            if "rewrite_prompt_version" not in checkpoint.columns:
+                checkpoint["rewrite_prompt_version"] = "v1"
+            checkpoint["rewrite_attempt"] = checkpoint["rewrite_attempt"].fillna(1).astype(int)
+            checkpoint = checkpoint.drop_duplicates(
+                ["source_candidate_id", "rewrite_attempt"], keep="last"
+            )
 
             completed_ids = set(
                 checkpoint.loc[
@@ -717,24 +737,36 @@ def reward_pairs_notebook() -> list[dict]:
             print("Recovered rewrites:", len(completed_ids & set(candidates["source_candidate_id"])))
             print("Pending rewrites:", len(pending))
 
-            if not pending.empty:
-                processor, model = load_text_generation_model(
-                    REWRITE_MODEL_ID,
-                    quantize_4bit=QUANTIZE_4BIT,
-                    loader_type="multimodal_lm",
-                )
-                decoding = DecodingSpec(
-                    name="counterfactual_rewrite_greedy",
-                    temperature=0.0,
-                    top_p=1.0,
-                    max_new_tokens=240,
-                )
-                for start in range(0, len(pending), REWRITE_BATCH_SIZE):
-                    batch = pending.iloc[start : start + REWRITE_BATCH_SIZE]
+            processor = None
+            model = None
+            decoding = DecodingSpec(
+                name="counterfactual_rewrite_greedy",
+                temperature=0.0,
+                top_p=1.0,
+                max_new_tokens=240,
+            )
+
+            def ensure_rewriter_loaded():
+                global processor, model
+                if model is None:
+                    processor, model = load_text_generation_model(
+                        REWRITE_MODEL_ID,
+                        quantize_4bit=QUANTIZE_4BIT,
+                        loader_type="multimodal_lm",
+                    )
+
+            def generate_attempt(targets, prompt_builder, attempt, prompt_version):
+                global checkpoint
+                if targets.empty:
+                    return
+                ensure_rewriter_loaded()
+                for start in range(0, len(targets), REWRITE_BATCH_SIZE):
+                    batch = targets.iloc[start : start + REWRITE_BATCH_SIZE]
+                    records = batch.to_dict("records")
                     generated = generate_batch(
                         tokenizer=processor,
                         model=model,
-                        prompts=[make_plain_rewrite_prompt(text) for text in batch["response"]],
+                        prompts=[prompt_builder(record) for record in records],
                         decoding=decoding,
                         use_chat_template=True,
                         seed=42,
@@ -745,35 +777,68 @@ def reward_pairs_notebook() -> list[dict]:
                             "plain_response": [normalize_plain_rewrite(text) for text in generated],
                             "rewrite_model_id": REWRITE_MODEL_ID,
                             "rewrite_run_id": REWARD_PAIR_RUN_ID,
+                            "rewrite_attempt": attempt,
+                            "rewrite_prompt_version": prompt_version,
                         }
                     )
                     checkpoint = (
                         pd.concat([checkpoint, new_rows], ignore_index=True)
-                        .drop_duplicates("source_candidate_id", keep="last")
+                        .drop_duplicates(
+                            ["source_candidate_id", "rewrite_attempt"], keep="last"
+                        )
                     )
                     save_dataframe(checkpoint, checkpoint_path)
-                    completed = min(start + len(batch), len(pending))
-                    wandb.log({"rewrite_progress": completed, "rewrite_total": len(pending)})
-                    print(f"Rewritten {completed}/{len(pending)}")
+                    completed = min(start + len(batch), len(targets))
+                    wandb.log({
+                        "rewrite_attempt": attempt,
+                        "rewrite_attempt_progress": completed,
+                        "rewrite_attempt_total": len(targets),
+                    })
+                    print(f"Attempt {attempt}: rewritten {completed}/{len(targets)}")
 
+            generate_attempt(
+                pending,
+                lambda record: make_plain_rewrite_prompt(record["response"]),
+                attempt=1,
+                prompt_version="v1",
+            )
+
+            for attempt in range(2, MAX_REWRITE_ATTEMPTS + 1):
+                attempt_records = candidates.merge(
+                    checkpoint,
+                    on="source_candidate_id",
+                    how="inner",
+                    validate="one_to_many",
+                )
+                best_so_far, _ = select_best_plain_rewrites(attempt_records)
+                retry_targets = best_so_far[~best_so_far["quality_pass"]].copy()
+                print(f"Attempt {attempt}: retrying {len(retry_targets)} failed candidates")
+                if retry_targets.empty:
+                    break
+                generate_attempt(
+                    retry_targets,
+                    lambda record: make_plain_rewrite_retry_prompt(
+                        record["response"], record["plain_response"]
+                    ),
+                    attempt=attempt,
+                    prompt_version="v2_strict_retry",
+                )
+
+            if model is not None:
                 del model, processor
                 gc.collect()
                 torch.cuda.empty_cache()
 
-            rewrite_columns = [
-                "source_candidate_id",
-                "plain_response",
-                "rewrite_model_id",
-                "rewrite_run_id",
-            ]
-            rewrites = candidates.merge(
-                checkpoint[rewrite_columns],
+            attempt_records = candidates.merge(
+                checkpoint,
                 on="source_candidate_id",
                 how="inner",
-                validate="one_to_one",
+                validate="one_to_many",
             )
+            rewrites, rewrite_attempt_quality = select_best_plain_rewrites(attempt_records)
             assert len(rewrites) == len(candidates), "Not all candidates have a checkpointed rewrite."
             print("Checkpoint:", checkpoint_path)
+            print("Rewrite attempts:", len(rewrite_attempt_quality))
             """
         ),
         code(
@@ -798,6 +863,10 @@ def reward_pairs_notebook() -> list[dict]:
                 rewrite_quality,
                 Path(config["drive_data_root"]) / "ocn_reward_pair_rewrite_quality_main_gemma4_qwen35.csv",
             )
+            attempt_quality_path = save_dataframe(
+                rewrite_attempt_quality,
+                Path(config["drive_data_root"]) / "ocn_reward_pair_rewrite_attempt_quality_main_gemma4_qwen35.csv",
+            )
             rejected_path = save_dataframe(
                 rejected,
                 Path(config["drive_data_root"]) / "ocn_reward_pair_rewrite_rejects_main_gemma4_qwen35.csv",
@@ -814,6 +883,14 @@ def reward_pairs_notebook() -> list[dict]:
             model_counts = (
                 rewrite_quality.groupby("model_id", dropna=False)
                 .agg(candidates=("source_candidate_id", "size"), accepted=("quality_pass", "sum"))
+                .reset_index()
+            )
+            attempt_yield = (
+                rewrite_attempt_quality.groupby("rewrite_attempt", dropna=False)
+                .agg(
+                    attempts=("source_candidate_id", "size"),
+                    passing=("quality_pass", "sum"),
+                )
                 .reset_index()
             )
             fig, axes = plt.subplots(1, 2, figsize=(15, 5.5))
@@ -845,9 +922,12 @@ def reward_pairs_notebook() -> list[dict]:
                 "accepted_pairs": valid_pair_count,
                 "acceptance_rate": valid_pair_count / max(len(candidates), 1),
                 "reward_pair_rows": len(pairs),
+                "rewrite_attempt_rows": len(rewrite_attempt_quality),
+                "max_rewrite_attempt": int(rewrite_attempt_quality["rewrite_attempt"].max()),
                 "mean_content_overlap": float(rewrite_quality["content_overlap"].mean()),
                 "mean_length_ratio": float(rewrite_quality["length_ratio"].mean()),
                 "model_yield": wandb.Table(dataframe=model_counts),
+                "attempt_yield": wandb.Table(dataframe=attempt_yield),
                 "rewrite_quality": wandb.Table(dataframe=rewrite_quality),
                 "reward_pairs": wandb.Table(dataframe=pairs),
                 "reward_pair_quality_chart": wandb.Image(str(figure_path)),
@@ -855,6 +935,7 @@ def reward_pairs_notebook() -> list[dict]:
             run.finish()
             print("Saved:", pair_path)
             print("Quality audit:", quality_path)
+            print("Attempt audit:", attempt_quality_path)
             print("Rejected rewrites:", rejected_path)
             print("Figure:", figure_path)
             print("Published:", repo_url)
