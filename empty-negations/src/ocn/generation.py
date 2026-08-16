@@ -121,6 +121,39 @@ def prepare_text_inputs(processor, prompt: str, use_chat_template: bool):
     return tokenizer(prompt, return_tensors="pt")
 
 
+def prepare_text_batch_inputs(processor, prompts: list[str], use_chat_template: bool):
+    if not prompts:
+        raise ValueError("prompts must not be empty")
+
+    tokenizer = _text_tokenizer(processor)
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    if use_chat_template and hasattr(processor, "apply_chat_template"):
+        conversations = [
+            [{"role": "user", "content": prompt}]
+            for prompt in prompts
+        ]
+        kwargs = {
+            "tokenize": True,
+            "return_dict": True,
+            "return_tensors": "pt",
+            "add_generation_prompt": True,
+            "padding": True,
+        }
+        try:
+            return processor.apply_chat_template(
+                conversations,
+                enable_thinking=False,
+                **kwargs,
+            )
+        except TypeError:
+            return processor.apply_chat_template(conversations, **kwargs)
+
+    return tokenizer(prompts, return_tensors="pt", padding=True)
+
+
 def generate_one(
     tokenizer,
     model,
@@ -150,6 +183,38 @@ def generate_one(
     return text_tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
 
+def generate_batch(
+    tokenizer,
+    model,
+    prompts: list[str],
+    decoding: DecodingSpec,
+    use_chat_template: bool,
+    seed: int,
+) -> list[str]:
+    import torch
+
+    set_seed(seed)
+    processor = tokenizer
+    text_tokenizer = _text_tokenizer(processor)
+    inputs = prepare_text_batch_inputs(processor, prompts, use_chat_template).to(model.device)
+    do_sample = decoding.temperature > 0
+    generation_kwargs = {
+        "max_new_tokens": decoding.max_new_tokens,
+        "do_sample": do_sample,
+        "pad_token_id": text_tokenizer.pad_token_id,
+    }
+    if do_sample:
+        generation_kwargs["temperature"] = decoding.temperature
+        generation_kwargs["top_p"] = decoding.top_p
+    with torch.no_grad():
+        output_ids = model.generate(**inputs, **generation_kwargs)
+    new_tokens = output_ids[:, inputs["input_ids"].shape[-1] :]
+    return [
+        response.strip()
+        for response in text_tokenizer.batch_decode(new_tokens, skip_special_tokens=True)
+    ]
+
+
 def generation_rows(
     prompts: pd.DataFrame,
     model_spec: ModelSpec,
@@ -160,19 +225,27 @@ def generation_rows(
 ) -> list[dict]:
     rows = []
     created_at = datetime.now(timezone.utc).isoformat()
-    for _, prompt_row in prompts.iterrows():
+    prompt_records = prompts.to_dict("records")
+    prompt_texts = [record["prompt"] for record in prompt_records]
+    generation_seeds = seeds if decoding.temperature > 0 else seeds[:1]
+    responses_by_seed = {
+        seed: generate_batch(
+            tokenizer=tokenizer,
+            model=model,
+            prompts=prompt_texts,
+            decoding=decoding,
+            use_chat_template=model_spec.use_chat_template,
+            seed=seed,
+        )
+        for seed in generation_seeds
+    }
+
+    for prompt_index, prompt_row in enumerate(prompt_records):
         for seed in seeds:
-            response = generate_one(
-                tokenizer=tokenizer,
-                model=model,
-                prompt=prompt_row["prompt"],
-                decoding=decoding,
-                use_chat_template=model_spec.use_chat_template,
-                seed=seed,
-            )
+            response_seed = seed if decoding.temperature > 0 else generation_seeds[0]
             rows.append(
                 {
-                    **prompt_row.to_dict(),
+                    **prompt_row,
                     "model_id": model_spec.model_id,
                     "model_family": model_spec.family,
                     "model_stage": model_spec.stage,
@@ -181,7 +254,7 @@ def generation_rows(
                     "top_p": decoding.top_p,
                     "max_new_tokens": decoding.max_new_tokens,
                     "seed": seed,
-                    "response": response,
+                    "response": responses_by_seed[response_seed][prompt_index],
                     "created_at": created_at,
                 }
             )
