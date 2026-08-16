@@ -652,10 +652,12 @@ def reward_pairs_notebook() -> list[dict]:
                 f"{config['hf_owner']}/ocn-empty-negations-reward-pairs-main-gemma4-qwen35",
             )
             REWRITE_MODEL_ID = "Qwen/Qwen3.5-2B"
+            FALLBACK_REWRITE_MODEL_ID = "google/gemma-4-E2B-it"
             REWRITE_BATCH_SIZE = int(os.environ.get("OCN_REWRITE_BATCH_SIZE", "12"))
             candidate_limit = int(os.environ.get("OCN_REWARD_PAIR_LIMIT", "0"))
             MAX_CANDIDATES = candidate_limit or None
-            MAX_REWRITE_ATTEMPTS = 3
+            MAX_QWEN_REWRITE_ATTEMPTS = 3
+            MAX_REWRITE_ATTEMPTS = 4
             QUANTIZE_4BIT = True
 
             if not torch.cuda.is_available():
@@ -670,6 +672,7 @@ def reward_pairs_notebook() -> list[dict]:
                 "source_repo": MAIN_DETECTION_REPO,
                 "output_repo": MAIN_REWARD_PAIR_REPO,
                 "rewrite_model_id": REWRITE_MODEL_ID,
+                "fallback_rewrite_model_id": FALLBACK_REWRITE_MODEL_ID,
                 "rewrite_batch_size": REWRITE_BATCH_SIZE,
                 "max_candidates": MAX_CANDIDATES,
                 "max_rewrite_attempts": MAX_REWRITE_ATTEMPTS,
@@ -739,6 +742,7 @@ def reward_pairs_notebook() -> list[dict]:
 
             processor = None
             model = None
+            loaded_rewrite_model_id = None
             decoding = DecodingSpec(
                 name="counterfactual_rewrite_greedy",
                 temperature=0.0,
@@ -746,20 +750,27 @@ def reward_pairs_notebook() -> list[dict]:
                 max_new_tokens=240,
             )
 
-            def ensure_rewriter_loaded():
-                global processor, model
+            def ensure_rewriter_loaded(model_id):
+                global processor, model, loaded_rewrite_model_id
+                if model is not None and loaded_rewrite_model_id != model_id:
+                    model = None
+                    processor = None
+                    loaded_rewrite_model_id = None
+                    gc.collect()
+                    torch.cuda.empty_cache()
                 if model is None:
                     processor, model = load_text_generation_model(
-                        REWRITE_MODEL_ID,
+                        model_id,
                         quantize_4bit=QUANTIZE_4BIT,
                         loader_type="multimodal_lm",
                     )
+                    loaded_rewrite_model_id = model_id
 
-            def generate_attempt(targets, prompt_builder, attempt, prompt_version):
+            def generate_attempt(targets, prompt_builder, attempt, prompt_version, model_id):
                 global checkpoint
                 if targets.empty:
                     return
-                ensure_rewriter_loaded()
+                ensure_rewriter_loaded(model_id)
                 for start in range(0, len(targets), REWRITE_BATCH_SIZE):
                     batch = targets.iloc[start : start + REWRITE_BATCH_SIZE]
                     records = batch.to_dict("records")
@@ -775,7 +786,7 @@ def reward_pairs_notebook() -> list[dict]:
                         {
                             "source_candidate_id": batch["source_candidate_id"].tolist(),
                             "plain_response": [normalize_plain_rewrite(text) for text in generated],
-                            "rewrite_model_id": REWRITE_MODEL_ID,
+                            "rewrite_model_id": model_id,
                             "rewrite_run_id": REWARD_PAIR_RUN_ID,
                             "rewrite_attempt": attempt,
                             "rewrite_prompt_version": prompt_version,
@@ -801,31 +812,82 @@ def reward_pairs_notebook() -> list[dict]:
                 lambda record: make_plain_rewrite_prompt(record["response"]),
                 attempt=1,
                 prompt_version="v1",
+                model_id=REWRITE_MODEL_ID,
             )
 
-            for attempt in range(2, MAX_REWRITE_ATTEMPTS + 1):
+            for attempt in range(2, MAX_QWEN_REWRITE_ATTEMPTS + 1):
+                prior_checkpoint = checkpoint[checkpoint["rewrite_attempt"] < attempt]
                 attempt_records = candidates.merge(
-                    checkpoint,
+                    prior_checkpoint,
                     on="source_candidate_id",
                     how="inner",
                     validate="one_to_many",
                 )
                 best_so_far, _ = select_best_plain_rewrites(attempt_records)
                 retry_targets = best_so_far[~best_so_far["quality_pass"]].copy()
-                print(f"Attempt {attempt}: retrying {len(retry_targets)} failed candidates")
+                completed_attempt_ids = set(
+                    checkpoint.loc[
+                        checkpoint["rewrite_attempt"].eq(attempt),
+                        "source_candidate_id",
+                    ]
+                )
+                pending_retry_targets = retry_targets[
+                    ~retry_targets["source_candidate_id"].isin(completed_attempt_ids)
+                ]
+                print(
+                    f"Attempt {attempt}: {len(retry_targets)} eligible, "
+                    f"{len(pending_retry_targets)} pending"
+                )
                 if retry_targets.empty:
                     break
                 generate_attempt(
-                    retry_targets,
+                    pending_retry_targets,
                     lambda record: make_plain_rewrite_retry_prompt(
                         record["response"], record["plain_response"]
                     ),
                     attempt=attempt,
                     prompt_version="v2_strict_retry",
+                    model_id=REWRITE_MODEL_ID,
                 )
 
+            prior_checkpoint = checkpoint[
+                checkpoint["rewrite_attempt"] < MAX_REWRITE_ATTEMPTS
+            ]
+            attempt_records = candidates.merge(
+                prior_checkpoint,
+                on="source_candidate_id",
+                how="inner",
+                validate="one_to_many",
+            )
+            best_so_far, _ = select_best_plain_rewrites(attempt_records)
+            fallback_targets = best_so_far[~best_so_far["quality_pass"]].copy()
+            completed_fallback_ids = set(
+                checkpoint.loc[
+                    checkpoint["rewrite_attempt"].eq(MAX_REWRITE_ATTEMPTS),
+                    "source_candidate_id",
+                ]
+            )
+            pending_fallback_targets = fallback_targets[
+                ~fallback_targets["source_candidate_id"].isin(completed_fallback_ids)
+            ]
+            print(
+                f"Attempt {MAX_REWRITE_ATTEMPTS} ({FALLBACK_REWRITE_MODEL_ID}): "
+                f"{len(fallback_targets)} eligible, {len(pending_fallback_targets)} pending"
+            )
+            generate_attempt(
+                pending_fallback_targets,
+                lambda record: make_plain_rewrite_retry_prompt(
+                    record["response"], record["plain_response"]
+                ),
+                attempt=MAX_REWRITE_ATTEMPTS,
+                prompt_version="v3_gemma_fallback",
+                model_id=FALLBACK_REWRITE_MODEL_ID,
+            )
+
             if model is not None:
-                del model, processor
+                model = None
+                processor = None
+                loaded_rewrite_model_id = None
                 gc.collect()
                 torch.cuda.empty_cache()
 

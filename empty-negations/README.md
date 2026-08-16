@@ -34,7 +34,7 @@ Run these in order:
 4. `03_detect_and_publish_ocn_dataset.ipynb`
    Runs the lexical OCN detector, saves scored generations, publishes the candidate dataset to Hugging Face, and logs charts to W&B.
 5. `04_create_reward_pair_dataset.ipynb`
-   Uses Qwen 3.5 2B on an L4 to create resumable direct-affirmative rewrites of real OCN candidates from notebook `03`, filters for detector separation and content retention, saves audit artifacts to Drive, and publishes blinded pairs to Hugging Face.
+   Uses Qwen 3.5 2B with a Gemma 4 E2B-it fallback on an L4 to create resumable direct-affirmative rewrites of real OCN candidates from notebook `03`, filters for detector separation and content retention, saves audit artifacts to Drive, and publishes blinded pairs to Hugging Face.
 6. `05_analysis_and_reporting.ipynb`
    Computes OCN rates, grouped tables, logistic regression, and report figures. Saves tables/plots to Drive and logs them to W&B.
 7. `06_optional_reward_model_scoring.ipynb`

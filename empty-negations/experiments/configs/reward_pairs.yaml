@@ -4,9 +4,10 @@ description: Counterfactual direct-affirmative rewrites of lexical OCN candidate
 source_dataset: ritwikraha/ocn-empty-negations-detection-main-gemma4-qwen35
 output_dataset: ritwikraha/ocn-empty-negations-reward-pairs-main-gemma4-qwen35
 rewrite_model: Qwen/Qwen3.5-2B
+fallback_rewrite_model: google/gemma-4-E2B-it
 required_gpu: NVIDIA L4
 quantize_4bit: true
-max_rewrite_attempts: 3
+max_rewrite_attempts: 4
 
 variant_types:
   - candidate_ocn
