@@ -186,7 +186,7 @@ def prompts_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             run = login_wandb(project="ocn-empty-negations", name=f"prompts-{config['run_id']}", config=config)
             sns.set_theme(style="whitegrid")
             """
@@ -291,7 +291,7 @@ def generation_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             """
         ),
         code(
@@ -521,7 +521,7 @@ def detection_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             EXPERIMENT_ID = "main_gemma4_qwen35"
             DETECTION_RUN_ID = utc_timestamp()
             MAIN_GENERATION_REPO = config.get(
@@ -626,7 +626,7 @@ def reward_pairs_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             run = login_wandb(project="ocn-empty-negations", name=f"reward-pairs-{config['run_id']}", config=config)
             """
         ),
@@ -698,7 +698,7 @@ def analysis_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             EXPERIMENT_ID = "main_gemma4_qwen35"
             ANALYSIS_RUN_ID = utc_timestamp()
             MAIN_DETECTION_REPO = config.get(
@@ -803,7 +803,7 @@ def reward_scoring_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             run = login_wandb(project="ocn-empty-negations", name=f"reward-score-{config['run_id']}", config=config)
             """
         ),
@@ -889,7 +889,7 @@ def lora_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             run = login_wandb(project="ocn-empty-negations", name=f"lora-sft-{config['run_id']}", config=config)
             """
         ),
