@@ -78,7 +78,7 @@ def test_post_trained_batch_disables_thinking():
         [{"role": "user", "content": "Second"}],
     ]
     assert processor.chat_kwargs["enable_thinking"] is False
-    assert processor.chat_kwargs["padding"] is True
+    assert processor.chat_kwargs["processor_kwargs"] == {"padding": True}
 
 
 def test_generation_rows_batches_and_reuses_greedy_output(monkeypatch):
