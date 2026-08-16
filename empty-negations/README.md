@@ -67,7 +67,7 @@ All notebooks autosave artifacts under:
 /content/drive/MyDrive/ocn_empty_negations/artifacts/
 ```
 
-Notebook `02` keeps the completed Qwen 2.5 pilot dataset separate from the main Gemma 4/Qwen 3.5 dataset. Before the main run, accept the gated Gemma model terms for `google/gemma-4-E2B` and `google/gemma-4-E2B-it`, start a fresh Colab A100 runtime, and rerun notebook `00` so the pinned Transformers version is installed.
+Notebook `02` keeps the completed Qwen 2.5 pilot dataset separate from the main Gemma 4/Qwen 3.5 dataset. The Gemma 4 checkpoints are public Apache 2.0 models and require no separate access request. Before the main run, start a fresh Colab A100 runtime and rerun notebook `00` so the pinned Transformers version is installed.
 
 ## Quick Start
 

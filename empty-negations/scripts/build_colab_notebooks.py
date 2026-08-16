@@ -249,7 +249,7 @@ def generation_notebook() -> list[dict]:
 
             This is the main OCN generation experiment. It runs matched base/post-trained pairs from Gemma 4 E2B and Qwen 3.5 2B over the full prompt bank, autosaves resumable chunks to Google Drive, logs progress to W&B, and publishes to a dedicated Hugging Face dataset.
 
-            Required runtime: an A100 GPU. The notebook stops before generation if Colab assigned a different accelerator. Before running, accept access to both `google/gemma-4-E2B` and `google/gemma-4-E2B-it` on Hugging Face.
+            Required runtime: an A100 GPU. The notebook stops before generation if Colab assigned a different accelerator. Both Gemma 4 checkpoints are public Apache 2.0 models and do not require a separate Hugging Face access request.
             """
         ),
         code(COMMON_BOOTSTRAP),
@@ -411,12 +411,10 @@ def generation_notebook() -> list[dict]:
                         loader_type=model_spec.loader_type,
                     )
                 except Exception as exc:
-                    access_hint = (
-                        " Accept the Gemma model terms on Hugging Face and ensure "
-                        "HF_WRITE_ACCESS can read gated models."
-                        if model_spec.model_id.startswith("google/gemma") else ""
-                    )
-                    raise RuntimeError(f"Could not load {model_spec.model_id}.{access_hint}") from exc
+                    raise RuntimeError(
+                        f"Could not load {model_spec.model_id}. Check the model ID, "
+                        "network connection, installed Transformers version, and available memory."
+                    ) from exc
 
                 model_revision = getattr(model.config, "_commit_hash", None)
                 for decoding in missing_decodings:
