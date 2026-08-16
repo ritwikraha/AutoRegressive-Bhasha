@@ -2,7 +2,7 @@
 license: mit
 task_categories:
 - text-classification
-- preference-ranking
+- text-ranking
 language:
 - en
 pretty_name: OCN Reward Preference Pairs
