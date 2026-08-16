@@ -1,0 +1,39 @@
+experiment_id: main_gemma4_qwen35
+run_mode: main
+prompt_dataset: ritwikraha/ocn-empty-negations-prompts
+generation_dataset: ritwikraha/ocn-empty-negations-generations-main-gemma4-qwen35
+detection_dataset: ritwikraha/ocn-empty-negations-detection-main-gemma4-qwen35
+prompt_count: 594
+models:
+  - model_id: google/gemma-4-E2B
+    family: gemma4
+    stage: base
+    loader_type: multimodal_lm
+  - model_id: google/gemma-4-E2B-it
+    family: gemma4
+    stage: instruct
+    loader_type: multimodal_lm
+  - model_id: Qwen/Qwen3.5-2B-Base
+    family: qwen3.5
+    stage: base
+    loader_type: multimodal_lm
+  - model_id: Qwen/Qwen3.5-2B
+    family: qwen3.5
+    stage: instruct
+    loader_type: multimodal_lm
+decodings:
+  - name: greedy
+    temperature: 0.0
+    top_p: 1.0
+    max_new_tokens: 160
+  - name: normal_temp
+    temperature: 0.7
+    top_p: 0.95
+    max_new_tokens: 180
+seeds: [1, 2]
+precision: bfloat16
+quantize_4bit: false
+thinking: false
+prompt_batch_size: 24
+required_gpu: NVIDIA A100
+expected_rows: 9504

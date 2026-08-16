@@ -7,7 +7,7 @@ name = "empty-negations"
 version = "0.1.0"
 description = "Experiments for studying overgeneralized contrastive negation in LLM outputs."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
   "jupyter>=1.0.0",
   "matplotlib>=3.8.0",
@@ -25,14 +25,14 @@ dev = [
   "nbformat>=5.9.0"
 ]
 models = [
-  "accelerate>=0.30.0",
-  "bitsandbytes>=0.43.3",
+  "accelerate>=1.10.0",
+  "bitsandbytes>=0.46.1",
   "datasets>=2.19.0",
   "huggingface_hub>=0.24.0",
   "peft>=0.12.0",
   "sentence-transformers>=3.0.0",
-  "torch>=2.2.0",
-  "transformers>=4.43.0",
+  "torch>=2.4.0",
+  "transformers==5.14.1",
   "trl>=0.10.0",
   "wandb>=0.17.0"
 ]

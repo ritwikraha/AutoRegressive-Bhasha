@@ -15,6 +15,7 @@ class ModelSpec:
     family: str
     stage: str
     use_chat_template: bool = False
+    loader_type: str = "causal_lm"
 
 
 @dataclass(frozen=True)
@@ -26,12 +27,10 @@ class DecodingSpec:
 
 
 DEFAULT_MODEL_SPECS: tuple[ModelSpec, ...] = (
-    ModelSpec("Qwen/Qwen2.5-0.5B", "qwen", "base", False),
-    ModelSpec("Qwen/Qwen2.5-0.5B-Instruct", "qwen", "instruct", True),
-    ModelSpec("Qwen/Qwen2.5-1.5B", "qwen", "base", False),
-    ModelSpec("Qwen/Qwen2.5-1.5B-Instruct", "qwen", "instruct", True),
-    ModelSpec("google/gemma-2-2b", "gemma", "base", False),
-    ModelSpec("google/gemma-2-2b-it", "gemma", "instruct", True),
+    ModelSpec("google/gemma-4-E2B", "gemma4", "base", False, "multimodal_lm"),
+    ModelSpec("google/gemma-4-E2B-it", "gemma4", "instruct", True, "multimodal_lm"),
+    ModelSpec("Qwen/Qwen3.5-2B-Base", "qwen3.5", "base", False, "multimodal_lm"),
+    ModelSpec("Qwen/Qwen3.5-2B", "qwen3.5", "instruct", True, "multimodal_lm"),
 )
 
 DEFAULT_DECODING_SPECS: tuple[DecodingSpec, ...] = (
@@ -54,16 +53,20 @@ def set_seed(seed: int) -> None:
         pass
 
 
-def load_text_generation_model(model_id: str, quantize_4bit: bool = True):
+def load_text_generation_model(
+    model_id: str,
+    quantize_4bit: bool = False,
+    loader_type: str = "causal_lm",
+):
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     kwargs: dict[str, Any] = {
         "device_map": "auto",
         "trust_remote_code": True,
     }
     if quantize_4bit:
+        from transformers import BitsAndBytesConfig
+
         kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.bfloat16,
@@ -71,19 +74,51 @@ def load_text_generation_model(model_id: str, quantize_4bit: bool = True):
             bnb_4bit_use_double_quant=True,
         )
     else:
-        kwargs["torch_dtype"] = torch.bfloat16
+        kwargs["dtype"] = torch.bfloat16
+
+    if loader_type == "multimodal_lm":
+        from transformers import AutoModelForMultimodalLM, AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        model = AutoModelForMultimodalLM.from_pretrained(model_id, **kwargs)
+        return processor, model
+
+    if loader_type != "causal_lm":
+        raise ValueError(f"Unsupported loader type: {loader_type}")
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
     return tokenizer, model
 
 
-def format_prompt(tokenizer, prompt: str, use_chat_template: bool) -> str:
-    if use_chat_template and getattr(tokenizer, "chat_template", None):
-        return tokenizer.apply_chat_template(
-            [{"role": "user", "content": prompt}],
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-    return prompt
+def _text_tokenizer(processor):
+    return getattr(processor, "tokenizer", processor)
+
+
+def prepare_text_inputs(processor, prompt: str, use_chat_template: bool):
+    tokenizer = _text_tokenizer(processor)
+    if use_chat_template and hasattr(processor, "apply_chat_template"):
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            return processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            return processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                add_generation_prompt=True,
+            )
+    return tokenizer(prompt, return_tensors="pt")
 
 
 def generate_one(
@@ -97,13 +132,14 @@ def generate_one(
     import torch
 
     set_seed(seed)
-    formatted = format_prompt(tokenizer, prompt, use_chat_template)
-    inputs = tokenizer(formatted, return_tensors="pt").to(model.device)
+    processor = tokenizer
+    text_tokenizer = _text_tokenizer(processor)
+    inputs = prepare_text_inputs(processor, prompt, use_chat_template).to(model.device)
     do_sample = decoding.temperature > 0
     generation_kwargs = {
         "max_new_tokens": decoding.max_new_tokens,
         "do_sample": do_sample,
-        "pad_token_id": tokenizer.eos_token_id,
+        "pad_token_id": text_tokenizer.eos_token_id,
     }
     if do_sample:
         generation_kwargs["temperature"] = decoding.temperature
@@ -111,7 +147,7 @@ def generate_one(
     with torch.no_grad():
         output_ids = model.generate(**inputs, **generation_kwargs)
     new_tokens = output_ids[0, inputs["input_ids"].shape[-1] :]
-    return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+    return text_tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
 
 def generation_rows(
