@@ -50,10 +50,14 @@ def get_secret(name: str, default: str | None = None) -> str | None:
 
 def mount_drive() -> Path:
     if running_in_colab():
+        drive_root = Path("/content/drive/MyDrive")
+        if drive_root.exists():
+            return drive_root
+
         from google.colab import drive  # type: ignore
 
         drive.mount("/content/drive")
-        return Path("/content/drive/MyDrive")
+        return drive_root
     return Path.cwd()
 
 
