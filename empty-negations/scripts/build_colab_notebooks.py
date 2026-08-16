@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import textwrap
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,7 +10,11 @@ NOTEBOOK_DIR = ROOT / "notebooks"
 
 
 def md(source: str) -> dict:
-    return {"cell_type": "markdown", "metadata": {}, "source": source.strip().splitlines(True)}
+    return {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": textwrap.dedent(source).strip().splitlines(True),
+    }
 
 
 def code(source: str) -> dict:
@@ -18,7 +23,7 @@ def code(source: str) -> dict:
         "execution_count": None,
         "metadata": {},
         "outputs": [],
-        "source": source.strip().splitlines(True),
+        "source": textwrap.dedent(source).strip().splitlines(True),
     }
 
 
@@ -42,6 +47,8 @@ COMMON_BOOTSTRAP = r"""
 from pathlib import Path
 import os, sys, json, subprocess, textwrap
 
+DEFAULT_REPO_URL = "https://github.com/ritwikraha/AutoRegressive-Bhasha.git"
+
 def find_repo_root():
     try:
         import google.colab  # type: ignore  # noqa: F401
@@ -54,21 +61,26 @@ def find_repo_root():
     candidates = [
         Path.cwd(),
         Path("/content/empty-negations"),
+        Path("/content/AutoRegressive-Bhasha/empty-negations"),
         Path("/content/drive/MyDrive/ocn_empty_negations"),
         Path("/content/drive/MyDrive/AutoRegressive-Bhasha/empty-negations"),
     ]
     for candidate in candidates:
         if (candidate / "src/ocn").exists():
             return candidate
-    repo_url = os.environ.get("OCN_REPO_URL", "")
-    if repo_url:
-        target = Path("/content/empty-negations")
-        if not target.exists():
-            subprocess.run(["git", "clone", repo_url, str(target)], check=True)
-        return target
+    repo_url = os.environ.get("OCN_REPO_URL", DEFAULT_REPO_URL)
+    target = Path("/content/AutoRegressive-Bhasha")
+    if not target.exists():
+        subprocess.run(["git", "clone", "--depth", "1", repo_url, str(target)], check=True)
+
+    cloned_candidates = [target / "empty-negations", target]
+    for candidate in cloned_candidates:
+        if (candidate / "src/ocn").exists():
+            return candidate
+
     raise FileNotFoundError(
-        "Could not find the empty-negations repo. Run this notebook from the repo, "
-        "copy it to /content/drive/MyDrive/ocn_empty_negations, or set OCN_REPO_URL."
+        f"Cloned {repo_url}, but could not find src/ocn. "
+        "Set OCN_REPO_URL to a repository containing empty-negations/src/ocn."
     )
 
 REPO_ROOT = find_repo_root()
@@ -90,7 +102,7 @@ def setup_notebook() -> list[dict]:
             - `HF_WRITE_ACCESS`
             - `WANDB_KEY`
 
-            Recommended runtime: Colab Pro GPU. A100 is ideal, L4 works for the default Qwen 0.5B/1.5B runs.
+            Notebook `00` itself can run on CPU. Before the main generation run in notebook `02`, start a fresh A100 runtime and rerun this setup so the pinned model dependencies are installed before Transformers is imported.
             """
         ),
         code(COMMON_BOOTSTRAP),
@@ -130,6 +142,8 @@ def setup_notebook() -> list[dict]:
                 "hf_prompt_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-prompts",
                 "hf_generation_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-generations",
                 "hf_detection_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-detection",
+                "hf_main_generation_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-generations-main-gemma4-qwen35",
+                "hf_main_detection_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-detection-main-gemma4-qwen35",
                 "hf_reward_pairs_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-reward-pairs",
                 "hf_reward_scores_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-reward-scores",
                 "drive_project_root": str(paths.project_root),
@@ -172,7 +186,7 @@ def prompts_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             run = login_wandb(project="ocn-empty-negations", name=f"prompts-{config['run_id']}", config=config)
             sns.set_theme(style="whitegrid")
             """
@@ -233,51 +247,69 @@ def generation_notebook() -> list[dict]:
             """
             # 02 - Generate OSS Model Responses
 
-            This notebook loads the prompt dataset, runs open-source causal language models, autosaves partial generations to Google Drive, logs progress to W&B, and publishes the combined generations dataset to Hugging Face.
+            This is the main OCN generation experiment. It runs matched base/post-trained pairs from Gemma 4 E2B and Qwen 3.5 2B over the full prompt bank, autosaves resumable chunks to Google Drive, logs progress to W&B, and publishes to a dedicated Hugging Face dataset.
 
-            Default models are Qwen 0.5B/1.5B base and instruct checkpoints. Gemma 2B models are included as optional entries because they may require accepting the model license on Hugging Face.
+            Required runtime: an A100 GPU. The notebook stops before generation if Colab assigned a different accelerator. Both Gemma 4 checkpoints are public Apache 2.0 models and do not require a separate Hugging Face access request.
             """
         ),
         code(COMMON_BOOTSTRAP),
         code(
             r"""
             import gc, json
+            from importlib.metadata import version
             from pathlib import Path
+            from packaging.version import Version
             import pandas as pd
             import torch
             import wandb
             from datasets import load_dataset
 
-            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, publish_dataframe_to_hf, save_dataframe
+            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, publish_dataframe_to_hf, save_dataframe, utc_timestamp
             from ocn.generation import (
                 DecodingSpec,
                 ModelSpec,
                 generation_rows,
                 load_text_generation_model,
             )
+            from ocn.prompt_factory import slugify
+
+            if Version(version("transformers")) < Version("5.14.1"):
+                raise RuntimeError(
+                    "Gemma 4 requires transformers>=5.14.1. Start a fresh Colab runtime, "
+                    "run the updated notebook 00, then return to notebook 02."
+                )
+
+            if not torch.cuda.is_available():
+                raise RuntimeError("No GPU detected. Select Runtime > Change runtime type > A100 GPU.")
+            GPU_NAME = torch.cuda.get_device_name(0)
+            if "A100" not in GPU_NAME.upper():
+                raise RuntimeError(
+                    f"This main run requires an A100, but Colab assigned {GPU_NAME}. "
+                    "Reconnect with Runtime > Change runtime type > A100 GPU."
+                )
+            print("Verified accelerator:", GPU_NAME)
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
-            run = login_wandb(project="ocn-empty-negations", name=f"generate-{config['run_id']}", config=config)
+            _ = login_huggingface("HF_WRITE_ACCESS")
             """
         ),
         code(
             r"""
             prompts = load_dataset(config["hf_prompt_repo"], split="train").to_pandas()
 
-            RUN_MODE = "pilot"  # change to "main" for the full prompt bank
-            PROMPT_LIMIT = config["default_prompt_limit"] if RUN_MODE == "pilot" else None
-            if PROMPT_LIMIT:
-                prompts = prompts.sample(n=min(PROMPT_LIMIT, len(prompts)), random_state=13).sort_values("prompt_id")
+            EXPERIMENT_ID = "main_gemma4_qwen35"
+            GENERATION_RUN_ID = utc_timestamp()
+            MAIN_GENERATION_REPO = config.get(
+                "hf_main_generation_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-generations-main-gemma4-qwen35",
+            )
 
             MODEL_SPECS = [
-                ModelSpec("Qwen/Qwen2.5-0.5B", "qwen", "base", False),
-                ModelSpec("Qwen/Qwen2.5-0.5B-Instruct", "qwen", "instruct", True),
-                ModelSpec("Qwen/Qwen2.5-1.5B-Instruct", "qwen", "instruct", True),
-                # Uncomment after accepting Gemma terms on Hugging Face:
-                # ModelSpec("google/gemma-2-2b", "gemma", "base", False),
-                # ModelSpec("google/gemma-2-2b-it", "gemma", "instruct", True),
+                ModelSpec("google/gemma-4-E2B", "gemma4", "base", False, "multimodal_lm"),
+                ModelSpec("google/gemma-4-E2B-it", "gemma4", "instruct", True, "multimodal_lm"),
+                ModelSpec("Qwen/Qwen3.5-2B-Base", "qwen3.5", "base", False, "multimodal_lm"),
+                ModelSpec("Qwen/Qwen3.5-2B", "qwen3.5", "instruct", True, "multimodal_lm"),
             ]
 
             DECODINGS = [
@@ -286,46 +318,168 @@ def generation_notebook() -> list[dict]:
             ]
 
             SEEDS = config["default_seeds"]
-            QUANTIZE_4BIT = True
+            PROMPT_BATCH_SIZE = 24
+            # All four models fit sequentially in BF16 on an A100. Do not enable
+            # quantization for the main study because it changes the model itself.
+            QUANTIZE_4BIT = False
+            EXPECTED_ROWS = len(prompts) * len(MODEL_SPECS) * len(DECODINGS) * len(SEEDS)
+
+            experiment_config = {
+                **config,
+                "experiment_id": EXPERIMENT_ID,
+                "generation_run_id": GENERATION_RUN_ID,
+                "run_mode": "main",
+                "gpu_name": GPU_NAME,
+                "precision": "bfloat16",
+                "quantize_4bit": QUANTIZE_4BIT,
+                "main_generation_repo": MAIN_GENERATION_REPO,
+                "models": [spec.model_id for spec in MODEL_SPECS],
+                "prompt_count": len(prompts),
+                "expected_rows": EXPECTED_ROWS,
+                "prompt_batch_size": PROMPT_BATCH_SIZE,
+                "inference_batching": "prompt_batch_up_to_24",
+                "greedy_seed_reuse": True,
+            }
+            run = login_wandb(
+                project="ocn-empty-negations",
+                name=f"generate-{EXPERIMENT_ID}-{GENERATION_RUN_ID}",
+                config=experiment_config,
+            )
             print("Prompts:", len(prompts), "Models:", len(MODEL_SPECS), "Decodings:", len(DECODINGS), "Seeds:", SEEDS)
+            print("Expected rows:", EXPECTED_ROWS)
+            print("Publishing to:", MAIN_GENERATION_REPO)
             """
         ),
         code(
             r"""
-            all_parts = []
-            generation_dir = Path(config["drive_data_root"]) / "generations_parts"
+            generation_dir = Path(config["drive_data_root"]) / "generation_runs" / EXPERIMENT_ID
             generation_dir.mkdir(parents=True, exist_ok=True)
+            expected_part_rows = len(prompts) * len(SEEDS)
+            expected_part_keys = {
+                (prompt_id, seed)
+                for prompt_id in prompts["prompt_id"]
+                for seed in SEEDS
+            }
+
+            def part_path_for(model_spec, decoding):
+                model_slug = slugify(model_spec.model_id)
+                return generation_dir / f"{model_slug}_{decoding.name}.csv"
+
+            def load_existing_part(path):
+                if not path.exists():
+                    return pd.DataFrame()
+                part = pd.read_csv(path)
+                required = {"prompt_id", "seed", "model_id", "decoding", "response"}
+                if not required.issubset(part.columns):
+                    print(f"Ignoring incompatible checkpoint: {path.name}")
+                    return pd.DataFrame()
+                part = part[part["prompt_id"].isin(prompts["prompt_id"])].copy()
+                return part.drop_duplicates(["prompt_id", "seed"], keep="last")
+
+            def load_complete_part(path):
+                part = load_existing_part(path)
+                keys = set(zip(part.get("prompt_id", []), part.get("seed", [])))
+                if keys != expected_part_keys:
+                    return None
+                return part
+
+            def combine_complete_parts():
+                frames = []
+                for spec in MODEL_SPECS:
+                    for decoding_spec in DECODINGS:
+                        complete = load_complete_part(part_path_for(spec, decoding_spec))
+                        if complete is not None:
+                            frames.append(complete)
+                if not frames:
+                    raise RuntimeError("No completed generation parts were found.")
+                return pd.concat(frames, ignore_index=True).sort_values(
+                    ["model_id", "decoding", "prompt_id", "seed"]
+                ).reset_index(drop=True)
 
             for model_spec in MODEL_SPECS:
-                print(f"\nLoading {model_spec.model_id}")
-                tokenizer, model = load_text_generation_model(model_spec.model_id, quantize_4bit=QUANTIZE_4BIT)
-                for decoding in DECODINGS:
-                    print(f"Generating: {model_spec.model_id} / {decoding.name}")
-                    rows = generation_rows(
-                        prompts=prompts,
-                        model_spec=model_spec,
-                        decoding=decoding,
-                        tokenizer=tokenizer,
-                        model=model,
-                        seeds=SEEDS,
-                    )
-                    part = pd.DataFrame(rows)
-                    part_path = generation_dir / f"{model_spec.family}_{model_spec.stage}_{decoding.name}.csv"
-                    save_dataframe(part, part_path)
-                    all_parts.append(part)
+                missing_decodings = [
+                    decoding for decoding in DECODINGS
+                    if load_complete_part(part_path_for(model_spec, decoding)) is None
+                ]
+                if not missing_decodings:
+                    print(f"Skipping completed model: {model_spec.model_id}")
+                    continue
 
-                    combined = pd.concat(all_parts, ignore_index=True)
-                    combined_path = save_dataframe(combined, Path(config["drive_data_root"]) / "ocn_generations.csv")
+                print(f"\nLoading {model_spec.model_id}")
+                try:
+                    tokenizer, model = load_text_generation_model(
+                        model_spec.model_id,
+                        quantize_4bit=QUANTIZE_4BIT,
+                        loader_type=model_spec.loader_type,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Could not load {model_spec.model_id}. Check the model ID, "
+                        "network connection, installed Transformers version, and available memory."
+                    ) from exc
+
+                model_revision = getattr(model.config, "_commit_hash", None)
+                for decoding in missing_decodings:
+                    print(f"Generating: {model_spec.model_id} / {decoding.name}")
+                    part_path = part_path_for(model_spec, decoding)
+                    part = load_existing_part(part_path)
+                    completed_prompt_ids = {
+                        prompt_id
+                        for prompt_id, group in part.groupby("prompt_id")
+                        if set(group["seed"]) == set(SEEDS)
+                    } if not part.empty else set()
+                    remaining = prompts[~prompts["prompt_id"].isin(completed_prompt_ids)]
+
+                    for start in range(0, len(remaining), PROMPT_BATCH_SIZE):
+                        prompt_batch = remaining.iloc[start : start + PROMPT_BATCH_SIZE]
+                        rows = generation_rows(
+                            prompts=prompt_batch,
+                            model_spec=model_spec,
+                            decoding=decoding,
+                            tokenizer=tokenizer,
+                            model=model,
+                            seeds=SEEDS,
+                        )
+                        new_rows = pd.DataFrame(rows)
+                        new_rows["experiment_id"] = EXPERIMENT_ID
+                        new_rows["generation_run_id"] = GENERATION_RUN_ID
+                        new_rows["gpu_name"] = GPU_NAME
+                        new_rows["precision"] = "bfloat16"
+                        new_rows["model_revision"] = model_revision
+                        new_rows["inference_batching"] = "prompt_batch_up_to_24"
+                        part = pd.concat([part, new_rows], ignore_index=True).drop_duplicates(
+                            ["prompt_id", "seed"], keep="last"
+                        )
+                        save_dataframe(part, part_path)
+                        wandb.log({
+                            "checkpoint_rows": len(part),
+                            "checkpoint_fraction": len(part) / expected_part_rows,
+                            "model_id": model_spec.model_id,
+                            "decoding": decoding.name,
+                        })
+                        print(f"Checkpointed {len(part)}/{expected_part_rows}: {part_path.name}")
+
+                    part = load_complete_part(part_path)
+                    if part is None:
+                        raise RuntimeError(f"Generation checkpoint is incomplete: {part_path}")
+
+                    combined = combine_complete_parts()
+                    combined_path = save_dataframe(
+                        combined,
+                        Path(config["drive_data_root"]) / "ocn_generations_main_gemma4_qwen35.csv",
+                    )
                     repo_url = publish_dataframe_to_hf(
                         combined,
-                        repo_id=config["hf_generation_repo"],
+                        repo_id=MAIN_GENERATION_REPO,
                         split="train",
                         private=config["hf_private"],
                         card_path=REPO_ROOT / "dataset_cards/ocn_generations.md",
-                        commit_message=f"Update OCN generations {config['run_id']}",
+                        commit_message=f"Update {EXPERIMENT_ID} generations {GENERATION_RUN_ID}",
                     )
                     wandb.log({
                         "generated_rows": len(combined),
+                        "expected_rows": EXPECTED_ROWS,
+                        "completion_fraction": len(combined) / EXPECTED_ROWS,
                         "last_part_rows": len(part),
                         "model_id": model_spec.model_id,
                         "decoding": decoding.name,
@@ -364,20 +518,41 @@ def detection_notebook() -> list[dict]:
             import wandb
             from datasets import load_dataset
 
-            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, publish_dataframe_to_hf, save_dataframe
+            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, publish_dataframe_to_hf, save_dataframe, utc_timestamp
             from ocn.detectors import OCNDetector
             from ocn.metrics import detection_summary, grouped_ocn_rates, top_patterns
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
-            run = login_wandb(project="ocn-empty-negations", name=f"detect-{config['run_id']}", config=config)
+            _ = login_huggingface("HF_WRITE_ACCESS")
+            EXPERIMENT_ID = "main_gemma4_qwen35"
+            DETECTION_RUN_ID = utc_timestamp()
+            MAIN_GENERATION_REPO = config.get(
+                "hf_main_generation_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-generations-main-gemma4-qwen35",
+            )
+            MAIN_DETECTION_REPO = config.get(
+                "hf_main_detection_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-detection-main-gemma4-qwen35",
+            )
+            detection_config = {
+                **config,
+                "experiment_id": EXPERIMENT_ID,
+                "detection_run_id": DETECTION_RUN_ID,
+                "source_repo": MAIN_GENERATION_REPO,
+                "output_repo": MAIN_DETECTION_REPO,
+            }
+            run = login_wandb(
+                project="ocn-empty-negations",
+                name=f"detect-{EXPERIMENT_ID}-{DETECTION_RUN_ID}",
+                config=detection_config,
+            )
             sns.set_theme(style="whitegrid")
             """
         ),
         code(
             r"""
-            generations = load_dataset(config["hf_generation_repo"], split="train").to_pandas()
+            generations = load_dataset(MAIN_GENERATION_REPO, split="train").to_pandas()
             scored = OCNDetector().annotate_rows(generations, text_column="response")
             summary = detection_summary(scored)
             summary
@@ -385,14 +560,17 @@ def detection_notebook() -> list[dict]:
         ),
         code(
             r"""
-            scored_path = save_dataframe(scored, Path(config["drive_data_root"]) / "ocn_detection.csv")
+            scored_path = save_dataframe(
+                scored,
+                Path(config["drive_data_root"]) / "ocn_detection_main_gemma4_qwen35.csv",
+            )
             repo_url = publish_dataframe_to_hf(
                 scored,
-                repo_id=config["hf_detection_repo"],
+                repo_id=MAIN_DETECTION_REPO,
                 split="train",
                 private=config["hf_private"],
                 card_path=REPO_ROOT / "dataset_cards/ocn_detection.md",
-                commit_message=f"Publish OCN detection {config['run_id']}",
+                commit_message=f"Publish {EXPERIMENT_ID} detection {DETECTION_RUN_ID}",
             )
             print("Saved:", scored_path)
             print("Published:", repo_url)
@@ -412,7 +590,7 @@ def detection_notebook() -> list[dict]:
             axes[1].set_title("Top category/variant OCN rates")
             axes[1].set_xlim(0, 1)
             plt.tight_layout()
-            fig_path = Path(config["drive_figure_root"]) / "03_ocn_rates.png"
+            fig_path = Path(config["drive_figure_root"]) / "03_ocn_rates_main_gemma4_qwen35.png"
             fig.savefig(fig_path, dpi=180, bbox_inches="tight")
 
             wandb.log({
@@ -451,7 +629,7 @@ def reward_pairs_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             run = login_wandb(project="ocn-empty-negations", name=f"reward-pairs-{config['run_id']}", config=config)
             """
         ),
@@ -518,24 +696,40 @@ def analysis_notebook() -> list[dict]:
             import wandb
             from datasets import load_dataset
 
-            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, save_dataframe
+            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, save_dataframe, utc_timestamp
             from ocn.metrics import detection_summary, grouped_ocn_rates, top_patterns
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
-            run = login_wandb(project="ocn-empty-negations", name=f"analysis-{config['run_id']}", config=config)
+            _ = login_huggingface("HF_WRITE_ACCESS")
+            EXPERIMENT_ID = "main_gemma4_qwen35"
+            ANALYSIS_RUN_ID = utc_timestamp()
+            MAIN_DETECTION_REPO = config.get(
+                "hf_main_detection_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-detection-main-gemma4-qwen35",
+            )
+            analysis_config = {
+                **config,
+                "experiment_id": EXPERIMENT_ID,
+                "analysis_run_id": ANALYSIS_RUN_ID,
+                "source_repo": MAIN_DETECTION_REPO,
+            }
+            run = login_wandb(
+                project="ocn-empty-negations",
+                name=f"analysis-{EXPERIMENT_ID}-{ANALYSIS_RUN_ID}",
+                config=analysis_config,
+            )
             sns.set_theme(style="whitegrid")
             """
         ),
         code(
             r"""
-            df = load_dataset(config["hf_detection_repo"], split="train").to_pandas()
+            df = load_dataset(MAIN_DETECTION_REPO, split="train").to_pandas()
             summary = detection_summary(df)
             model_rates = grouped_ocn_rates(df, ["model_id", "model_stage", "decoding"])
             prompt_rates = grouped_ocn_rates(df, ["category", "variant", "persona"])
-            save_dataframe(model_rates, Path(config["drive_data_root"]) / "report_model_rates.csv")
-            save_dataframe(prompt_rates, Path(config["drive_data_root"]) / "report_prompt_rates.csv")
+            save_dataframe(model_rates, Path(config["drive_data_root"]) / "report_model_rates_main_gemma4_qwen35.csv")
+            save_dataframe(prompt_rates, Path(config["drive_data_root"]) / "report_prompt_rates_main_gemma4_qwen35.csv")
             summary
             """
         ),
@@ -545,7 +739,7 @@ def analysis_notebook() -> list[dict]:
             regression_df["has_ocn_int"] = regression_df["has_ocn"].astype(int)
             formula = "has_ocn_int ~ C(model_stage) + C(model_family) + C(decoding) + C(variant) + C(persona) + length_target"
             model = smf.logit(formula, data=regression_df).fit(disp=False)
-            report_path = Path(config["drive_data_root"]) / "logit_model_summary.txt"
+            report_path = Path(config["drive_data_root"]) / "logit_model_summary_main_gemma4_qwen35.txt"
             report_path.write_text(model.summary().as_text(), encoding="utf-8")
             print(model.summary())
             """
@@ -572,7 +766,7 @@ def analysis_notebook() -> list[dict]:
             axes[1, 1].set_title("Top detector patterns")
             plt.tight_layout()
 
-            fig_path = Path(config["drive_figure_root"]) / "05_analysis_dashboard.png"
+            fig_path = Path(config["drive_figure_root"]) / "05_analysis_dashboard_main_gemma4_qwen35.png"
             fig.savefig(fig_path, dpi=180, bbox_inches="tight")
             wandb.log({
                 **summary.to_dict(),
@@ -612,7 +806,7 @@ def reward_scoring_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             run = login_wandb(project="ocn-empty-negations", name=f"reward-score-{config['run_id']}", config=config)
             """
         ),
@@ -698,7 +892,7 @@ def lora_notebook() -> list[dict]:
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
-            login_huggingface("HF_WRITE_ACCESS")
+            _ = login_huggingface("HF_WRITE_ACCESS")
             run = login_wandb(project="ocn-empty-negations", name=f"lora-sft-{config['run_id']}", config=config)
             """
         ),

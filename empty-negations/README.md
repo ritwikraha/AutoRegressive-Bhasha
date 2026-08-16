@@ -12,6 +12,7 @@ The research question is whether language models overuse these frames, especiall
 
 - `docs/research_protocol.md` - paper-oriented study design and hypotheses.
 - `docs/experiment_matrix.md` - concrete experiment menu and rollout plan.
+- `experiments/configs/main_gemma4_qwen35.yaml` - exact main-run model, decoding, seed, hardware, and publication manifest.
 - `annotation/codebook.md` - human annotation rules for OCN examples.
 - `dataset_cards/` - Hugging Face dataset cards for each published dataset.
 - `requirements-colab.txt` - Colab Pro runtime dependencies.
@@ -29,7 +30,7 @@ Run these in order:
 2. `01_create_prompt_dataset.ipynb`
    Creates the factorial OCN prompt dataset, saves it to Drive, logs plots to W&B, and publishes to Hugging Face.
 3. `02_generate_oss_model_responses.ipynb`
-   Runs Qwen OSS models by default, with Gemma entries included as optional gated models. Autosaves partial generations to Drive and republishes the combined generation dataset after each chunk.
+   Runs the full 594-prompt main experiment on matched Gemma 4 E2B and Qwen 3.5 2B base/post-trained pairs. Requires an A100, autosaves resumable chunks to Drive, and republishes the combined dataset after each chunk.
 4. `03_detect_and_publish_ocn_dataset.ipynb`
    Runs the lexical OCN detector, saves scored generations, publishes the candidate dataset to Hugging Face, and logs charts to W&B.
 5. `04_create_reward_pair_dataset.ipynb`
@@ -54,6 +55,8 @@ The setup notebook derives Hugging Face dataset repo names from your authenticat
 <user>/ocn-empty-negations-prompts
 <user>/ocn-empty-negations-generations
 <user>/ocn-empty-negations-detection
+<user>/ocn-empty-negations-generations-main-gemma4-qwen35
+<user>/ocn-empty-negations-detection-main-gemma4-qwen35
 <user>/ocn-empty-negations-reward-pairs
 <user>/ocn-empty-negations-reward-scores
 ```
@@ -63,6 +66,8 @@ All notebooks autosave artifacts under:
 ```text
 /content/drive/MyDrive/ocn_empty_negations/artifacts/
 ```
+
+Notebook `02` keeps the completed Qwen 2.5 pilot dataset separate from the main Gemma 4/Qwen 3.5 dataset. The Gemma 4 checkpoints are public Apache 2.0 models and require no separate access request. Before the main run, start a fresh Colab A100 runtime and rerun notebook `00` so the pinned Transformers version is installed.
 
 ## Quick Start
 
