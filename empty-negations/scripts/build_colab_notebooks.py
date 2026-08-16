@@ -27,12 +27,12 @@ def code(source: str) -> dict:
     }
 
 
-def write_notebook(name: str, cells: list[dict]) -> None:
+def write_notebook(name: str, cells: list[dict], gpu_type: str = "A100") -> None:
     notebook = {
         "cells": cells,
         "metadata": {
             "accelerator": "GPU",
-            "colab": {"gpuType": "A100", "provenance": []},
+            "colab": {"gpuType": gpu_type, "provenance": []},
             "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
             "language_info": {"name": "python", "version": "3.10"},
         },
@@ -144,6 +144,8 @@ def setup_notebook() -> list[dict]:
                 "hf_detection_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-detection",
                 "hf_main_generation_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-generations-main-gemma4-qwen35",
                 "hf_main_detection_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-detection-main-gemma4-qwen35",
+                "hf_main_reward_pairs_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-reward-pairs-main-gemma4-qwen35",
+                "hf_main_reward_scores_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-reward-scores-main-gemma4-qwen35",
                 "hf_reward_pairs_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-reward-pairs",
                 "hf_reward_scores_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-reward-scores",
                 "drive_project_root": str(paths.project_root),
@@ -611,65 +613,253 @@ def reward_pairs_notebook() -> list[dict]:
     return [
         md(
             """
-            # 04 - Create Reward Preference Pair Dataset
+            # 04 - Create Counterfactual Reward Preference Pairs
 
-            This notebook creates matched plain/OCN response variants, verifies detector separation, saves to Drive, and publishes the pair dataset to Hugging Face.
+            This notebook loads the main detection dataset, rewrites every unique lexical OCN candidate into direct affirmative prose with Qwen 3.5 2B, filters for detector separation and content retention, saves resumable artifacts to Drive, publishes valid blinded pairs to Hugging Face, and logs quality diagnostics to W&B.
+
+            Use an L4 GPU. Set `OCN_REWARD_PAIR_LIMIT` only for a pilot; leave it unset for the complete run.
             """
         ),
         code(COMMON_BOOTSTRAP),
         code(
             r"""
+            import gc
             import json
+            import os
             from pathlib import Path
+            import matplotlib.pyplot as plt
+            import pandas as pd
+            import seaborn as sns
+            import torch
             import wandb
+            from datasets import load_dataset
 
-            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, publish_dataframe_to_hf, save_dataframe
-            from ocn.detectors import OCNDetector
-            from ocn.reward_pairs import PropositionSet, starter_proposition_sets, variants_to_frame
+            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, publish_dataframe_to_hf, save_dataframe, utc_timestamp
+            from ocn.generation import DecodingSpec, generate_batch, load_text_generation_model
+            from ocn.reward_pairs import build_counterfactual_pair_frame, make_plain_rewrite_prompt, normalize_plain_rewrite, select_unique_ocn_candidates
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
             _ = login_huggingface("HF_WRITE_ACCESS")
-            run = login_wandb(project="ocn-empty-negations", name=f"reward-pairs-{config['run_id']}", config=config)
-            """
-        ),
-        code(
-            r"""
-            extra_items = [
-                PropositionSet("r004", "remote work policy", "The policy", "improves hiring flexibility", "changes coordination costs across teams"),
-                PropositionSet("r005", "API design", "The design", "makes endpoints easier to use", "reduces integration errors for developers"),
-                PropositionSet("r006", "data privacy", "The program", "protects customer information", "strengthens trust with users and regulators"),
-                PropositionSet("r007", "process improvement", "The change", "reduces manual review time", "gives teams clearer visibility into bottlenecks"),
-                PropositionSet("r008", "CRISPR", "The technique", "edits targeted genetic sequences", "creates new possibilities for biological research"),
-                PropositionSet("r009", "budgeting app", "The app", "tracks spending", "helps users notice patterns before they become problems"),
-                PropositionSet("r010", "printing press", "The invention", "increased copying speed", "changed how knowledge circulated across institutions"),
-                PropositionSet("r011", "leadership", "Leadership", "coordinates group action", "helps people make decisions under uncertainty"),
-                PropositionSet("r012", "sincere apology", "A sincere apology", "acknowledges harm", "creates conditions for repair"),
-            ]
+            EXPERIMENT_ID = "main_gemma4_qwen35"
+            REWARD_PAIR_RUN_ID = utc_timestamp()
+            MAIN_DETECTION_REPO = config.get(
+                "hf_main_detection_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-detection-main-gemma4-qwen35",
+            )
+            MAIN_REWARD_PAIR_REPO = config.get(
+                "hf_main_reward_pairs_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-reward-pairs-main-gemma4-qwen35",
+            )
+            REWRITE_MODEL_ID = "Qwen/Qwen3.5-2B"
+            REWRITE_BATCH_SIZE = int(os.environ.get("OCN_REWRITE_BATCH_SIZE", "12"))
+            candidate_limit = int(os.environ.get("OCN_REWARD_PAIR_LIMIT", "0"))
+            MAX_CANDIDATES = candidate_limit or None
+            QUANTIZE_4BIT = True
 
-            pairs = variants_to_frame(starter_proposition_sets() + extra_items, shuffle=True, seed=42)
-            scored_pairs = OCNDetector().annotate_rows(pairs, text_column="response")
-            scored_pairs.groupby("variant_type")[["has_ocn", "ocn_count"]].mean()
+            if not torch.cuda.is_available():
+                raise RuntimeError("Notebook 04 requires a GPU runtime; select an L4 in Colab.")
+            GPU_NAME = torch.cuda.get_device_name(0)
+            print("GPU:", GPU_NAME)
+
+            reward_config = {
+                **config,
+                "experiment_id": EXPERIMENT_ID,
+                "reward_pair_run_id": REWARD_PAIR_RUN_ID,
+                "source_repo": MAIN_DETECTION_REPO,
+                "output_repo": MAIN_REWARD_PAIR_REPO,
+                "rewrite_model_id": REWRITE_MODEL_ID,
+                "rewrite_batch_size": REWRITE_BATCH_SIZE,
+                "max_candidates": MAX_CANDIDATES,
+                "quantize_4bit": QUANTIZE_4BIT,
+                "gpu_name": GPU_NAME,
+            }
+            run = login_wandb(
+                project="ocn-empty-negations",
+                name=f"reward-pairs-{EXPERIMENT_ID}-{REWARD_PAIR_RUN_ID}",
+                config=reward_config,
+            )
+            sns.set_theme(style="whitegrid")
             """
         ),
         code(
             r"""
-            pair_path = save_dataframe(scored_pairs, Path(config["drive_data_root"]) / "ocn_reward_pairs.csv")
+            detections = load_dataset(MAIN_DETECTION_REPO, split="train").to_pandas()
+            candidates = select_unique_ocn_candidates(detections, limit=MAX_CANDIDATES)
+            print("Detection rows:", len(detections))
+            print("Lexical OCN rows:", int(detections["has_ocn"].sum()))
+            print("Unique rewrite candidates:", len(candidates))
+            display(
+                candidates.groupby(["model_id", "decoding"], dropna=False)
+                .size()
+                .rename("candidates")
+                .reset_index()
+            )
+            """
+        ),
+        code(
+            r"""
+            checkpoint_path = Path(config["drive_data_root"]) / "ocn_reward_pair_rewrites_main_gemma4_qwen35.csv"
+            if checkpoint_path.exists():
+                checkpoint = pd.read_csv(checkpoint_path).drop_duplicates("source_candidate_id", keep="last")
+            else:
+                checkpoint = pd.DataFrame(
+                    columns=["source_candidate_id", "plain_response", "rewrite_model_id", "rewrite_run_id"]
+                )
+
+            completed_ids = set(
+                checkpoint.loc[
+                    checkpoint["plain_response"].fillna("").str.strip().ne(""),
+                    "source_candidate_id",
+                ]
+            )
+            pending = candidates[~candidates["source_candidate_id"].isin(completed_ids)].copy()
+            print("Recovered rewrites:", len(completed_ids & set(candidates["source_candidate_id"])))
+            print("Pending rewrites:", len(pending))
+
+            if not pending.empty:
+                processor, model = load_text_generation_model(
+                    REWRITE_MODEL_ID,
+                    quantize_4bit=QUANTIZE_4BIT,
+                    loader_type="multimodal_lm",
+                )
+                decoding = DecodingSpec(
+                    name="counterfactual_rewrite_greedy",
+                    temperature=0.0,
+                    top_p=1.0,
+                    max_new_tokens=240,
+                )
+                for start in range(0, len(pending), REWRITE_BATCH_SIZE):
+                    batch = pending.iloc[start : start + REWRITE_BATCH_SIZE]
+                    generated = generate_batch(
+                        tokenizer=processor,
+                        model=model,
+                        prompts=[make_plain_rewrite_prompt(text) for text in batch["response"]],
+                        decoding=decoding,
+                        use_chat_template=True,
+                        seed=42,
+                    )
+                    new_rows = pd.DataFrame(
+                        {
+                            "source_candidate_id": batch["source_candidate_id"].tolist(),
+                            "plain_response": [normalize_plain_rewrite(text) for text in generated],
+                            "rewrite_model_id": REWRITE_MODEL_ID,
+                            "rewrite_run_id": REWARD_PAIR_RUN_ID,
+                        }
+                    )
+                    checkpoint = (
+                        pd.concat([checkpoint, new_rows], ignore_index=True)
+                        .drop_duplicates("source_candidate_id", keep="last")
+                    )
+                    save_dataframe(checkpoint, checkpoint_path)
+                    completed = min(start + len(batch), len(pending))
+                    wandb.log({"rewrite_progress": completed, "rewrite_total": len(pending)})
+                    print(f"Rewritten {completed}/{len(pending)}")
+
+                del model, processor
+                gc.collect()
+                torch.cuda.empty_cache()
+
+            rewrite_columns = [
+                "source_candidate_id",
+                "plain_response",
+                "rewrite_model_id",
+                "rewrite_run_id",
+            ]
+            rewrites = candidates.merge(
+                checkpoint[rewrite_columns],
+                on="source_candidate_id",
+                how="inner",
+                validate="one_to_one",
+            )
+            assert len(rewrites) == len(candidates), "Not all candidates have a checkpointed rewrite."
+            print("Checkpoint:", checkpoint_path)
+            """
+        ),
+        code(
+            r"""
+            pairs, rewrite_quality = build_counterfactual_pair_frame(rewrites, seed=42)
+            valid_pair_count = int(rewrite_quality["quality_pass"].sum())
+            rejected = rewrite_quality[~rewrite_quality["quality_pass"]].copy()
+
+            if valid_pair_count == 0:
+                raise RuntimeError("No rewrites passed the counterfactual-pair quality controls.")
+            if not pairs.groupby("pair_id").size().eq(2).all():
+                raise AssertionError("Every published reward pair must contain exactly two variants.")
+            separation = pairs.groupby("variant_type")["has_ocn"].mean()
+            if separation.get("candidate_ocn") != 1.0 or separation.get("plain_rewrite") != 0.0:
+                raise AssertionError("Published pairs do not have perfect lexical detector separation.")
+
+            pair_path = save_dataframe(
+                pairs,
+                Path(config["drive_data_root"]) / "ocn_reward_pairs_main_gemma4_qwen35.csv",
+            )
+            quality_path = save_dataframe(
+                rewrite_quality,
+                Path(config["drive_data_root"]) / "ocn_reward_pair_rewrite_quality_main_gemma4_qwen35.csv",
+            )
+            rejected_path = save_dataframe(
+                rejected,
+                Path(config["drive_data_root"]) / "ocn_reward_pair_rewrite_rejects_main_gemma4_qwen35.csv",
+            )
             repo_url = publish_dataframe_to_hf(
-                scored_pairs,
-                repo_id=config["hf_reward_pairs_repo"],
+                pairs,
+                repo_id=MAIN_REWARD_PAIR_REPO,
                 split="train",
                 private=config["hf_private"],
                 card_path=REPO_ROOT / "dataset_cards/ocn_reward_pairs.md",
-                commit_message=f"Publish OCN reward pairs {config['run_id']}",
+                commit_message=f"Publish {EXPERIMENT_ID} reward pairs {REWARD_PAIR_RUN_ID}",
             )
+
+            model_counts = (
+                rewrite_quality.groupby("model_id", dropna=False)
+                .agg(candidates=("source_candidate_id", "size"), accepted=("quality_pass", "sum"))
+                .reset_index()
+            )
+            fig, axes = plt.subplots(1, 2, figsize=(15, 5.5))
+            model_plot = model_counts.melt(
+                id_vars="model_id",
+                value_vars=["candidates", "accepted"],
+                var_name="status",
+                value_name="count",
+            )
+            sns.barplot(data=model_plot, y="model_id", x="count", hue="status", ax=axes[0])
+            axes[0].set_title("Counterfactual rewrite yield by source model")
+            sns.histplot(
+                data=rewrite_quality,
+                x="length_ratio",
+                hue="quality_pass",
+                bins=30,
+                multiple="layer",
+                ax=axes[1],
+            )
+            axes[1].set_title("Plain/source token-length ratio")
+            plt.tight_layout()
+            figure_path = Path(config["drive_figure_root"]) / "04_reward_pair_quality_main_gemma4_qwen35.png"
+            fig.savefig(figure_path, dpi=180, bbox_inches="tight")
+
             wandb.log({
-                "reward_pair_rows": len(scored_pairs),
-                "reward_pairs": wandb.Table(dataframe=scored_pairs),
+                "source_detection_rows": len(detections),
+                "lexical_ocn_rows": int(detections["has_ocn"].sum()),
+                "unique_rewrite_candidates": len(candidates),
+                "accepted_pairs": valid_pair_count,
+                "acceptance_rate": valid_pair_count / max(len(candidates), 1),
+                "reward_pair_rows": len(pairs),
+                "mean_content_overlap": float(rewrite_quality["content_overlap"].mean()),
+                "mean_length_ratio": float(rewrite_quality["length_ratio"].mean()),
+                "model_yield": wandb.Table(dataframe=model_counts),
+                "rewrite_quality": wandb.Table(dataframe=rewrite_quality),
+                "reward_pairs": wandb.Table(dataframe=pairs),
+                "reward_pair_quality_chart": wandb.Image(str(figure_path)),
             })
             run.finish()
             print("Saved:", pair_path)
+            print("Quality audit:", quality_path)
+            print("Rejected rewrites:", rejected_path)
+            print("Figure:", figure_path)
             print("Published:", repo_url)
+            print("Accepted pairs:", valid_pair_count)
+            separation
             """
         ),
     ]
@@ -802,17 +992,38 @@ def reward_scoring_notebook() -> list[dict]:
             from datasets import load_dataset
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, publish_dataframe_to_hf, save_dataframe
+            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, publish_dataframe_to_hf, save_dataframe, utc_timestamp
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
             _ = login_huggingface("HF_WRITE_ACCESS")
-            run = login_wandb(project="ocn-empty-negations", name=f"reward-score-{config['run_id']}", config=config)
+            EXPERIMENT_ID = "main_gemma4_qwen35"
+            REWARD_SCORE_RUN_ID = utc_timestamp()
+            MAIN_REWARD_PAIR_REPO = config.get(
+                "hf_main_reward_pairs_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-reward-pairs-main-gemma4-qwen35",
+            )
+            MAIN_REWARD_SCORE_REPO = config.get(
+                "hf_main_reward_scores_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-reward-scores-main-gemma4-qwen35",
+            )
+            score_config = {
+                **config,
+                "experiment_id": EXPERIMENT_ID,
+                "reward_score_run_id": REWARD_SCORE_RUN_ID,
+                "source_repo": MAIN_REWARD_PAIR_REPO,
+                "output_repo": MAIN_REWARD_SCORE_REPO,
+            }
+            run = login_wandb(
+                project="ocn-empty-negations",
+                name=f"reward-score-{EXPERIMENT_ID}-{REWARD_SCORE_RUN_ID}",
+                config=score_config,
+            )
             """
         ),
         code(
             r"""
-            pairs = load_dataset(config["hf_reward_pairs_repo"], split="train").to_pandas()
+            pairs = load_dataset(MAIN_REWARD_PAIR_REPO, split="train").to_pandas()
             REWARD_MODEL_ID = "OpenAssistant/reward-model-deberta-v3-large-v2"
 
             tokenizer = AutoTokenizer.from_pretrained(REWARD_MODEL_ID)
@@ -832,28 +1043,29 @@ def reward_scoring_notebook() -> list[dict]:
         ),
         code(
             r"""
-            scores_path = save_dataframe(pairs, Path(config["drive_data_root"]) / "ocn_reward_scores.csv")
+            scores_path = save_dataframe(
+                pairs,
+                Path(config["drive_data_root"]) / "ocn_reward_scores_main_gemma4_qwen35.csv",
+            )
             repo_url = publish_dataframe_to_hf(
                 pairs,
-                repo_id=config["hf_reward_scores_repo"],
+                repo_id=MAIN_REWARD_SCORE_REPO,
                 split="train",
                 private=config["hf_private"],
-                commit_message=f"Publish OCN reward scores {config['run_id']}",
+                commit_message=f"Publish {EXPERIMENT_ID} reward scores {REWARD_SCORE_RUN_ID}",
             )
 
             deltas = (
-                pairs.pivot_table(index="question_id", columns="variant_type", values="reward_score", aggfunc="mean")
+                pairs.pivot_table(index="pair_id", columns="variant_type", values="reward_score", aggfunc="mean")
                 .assign(
-                    justified_minus_plain=lambda x: x.get("justified_ocn") - x.get("plain"),
-                    empty_minus_plain=lambda x: x.get("empty_ocn") - x.get("plain"),
+                    candidate_ocn_minus_plain=lambda x: x["candidate_ocn"] - x["plain_rewrite"],
                 )
                 .reset_index()
             )
             wandb.log({
                 "reward_scores": wandb.Table(dataframe=pairs),
                 "reward_deltas": wandb.Table(dataframe=deltas),
-                "mean_justified_minus_plain": float(deltas["justified_minus_plain"].mean()),
-                "mean_empty_minus_plain": float(deltas["empty_minus_plain"].mean()),
+                "mean_candidate_ocn_minus_plain": float(deltas["candidate_ocn_minus_plain"].mean()),
             })
             run.finish()
             print("Saved:", scores_path)
@@ -976,7 +1188,7 @@ def main() -> None:
     write_notebook("01_create_prompt_dataset.ipynb", prompts_notebook())
     write_notebook("02_generate_oss_model_responses.ipynb", generation_notebook())
     write_notebook("03_detect_and_publish_ocn_dataset.ipynb", detection_notebook())
-    write_notebook("04_create_reward_pair_dataset.ipynb", reward_pairs_notebook())
+    write_notebook("04_create_reward_pair_dataset.ipynb", reward_pairs_notebook(), gpu_type="L4")
     write_notebook("05_analysis_and_reporting.ipynb", analysis_notebook())
     write_notebook("06_optional_reward_model_scoring.ipynb", reward_scoring_notebook())
     write_notebook("07_optional_lora_style_intervention.ipynb", lora_notebook())

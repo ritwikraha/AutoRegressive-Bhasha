@@ -1,11 +1,15 @@
-name: ocn_reward_pairs
-description: Matched response variants for reward-model, LLM-judge, and human evaluation.
+name: ocn_reward_pairs_main_gemma4_qwen35
+description: Counterfactual direct-affirmative rewrites of lexical OCN candidates from the main Gemma 4 and Qwen 3.5 experiment.
+
+source_dataset: ritwikraha/ocn-empty-negations-detection-main-gemma4-qwen35
+output_dataset: ritwikraha/ocn-empty-negations-reward-pairs-main-gemma4-qwen35
+rewrite_model: Qwen/Qwen3.5-2B
+required_gpu: NVIDIA L4
+quantize_4bit: true
 
 variant_types:
-  - plain
-  - justified_ocn
-  - empty_ocn
-  - explicit_genuine_contrast
+  - candidate_ocn
+  - plain_rewrite
 
 judge_dimensions:
   - correctness
@@ -18,10 +22,16 @@ judge_dimensions:
 controls:
   match_facts: true
   approximate_length_tokens: true
-  same_number_of_propositions: true
+  detector_separation: true
+  minimum_content_token_overlap: 0.55
+  minimum_length_ratio: 0.60
+  maximum_length_ratio: 1.35
   randomize_order: true
   blind_variant_labels: true
 
 outputs:
-  pair_table: data/processed/reward_pairs.csv
+  pair_table: ocn_reward_pairs_main_gemma4_qwen35.csv
+  rewrite_checkpoint: ocn_reward_pair_rewrites_main_gemma4_qwen35.csv
+  quality_audit: ocn_reward_pair_rewrite_quality_main_gemma4_qwen35.csv
+  rejected_rewrites: ocn_reward_pair_rewrite_rejects_main_gemma4_qwen35.csv
   judge_table: data/processed/reward_judgments.csv
