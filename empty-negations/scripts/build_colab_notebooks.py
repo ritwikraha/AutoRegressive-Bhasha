@@ -1198,6 +1198,22 @@ def semantic_annotation_notebook() -> list[dict]:
                 frame = pd.read_csv(path, dtype={"example_id": str})
                 if "attempt" in frame.columns:
                     frame["attempt"] = frame["attempt"].astype(int)
+                parse_ok = frame["parse_ok"].astype(str).str.lower().eq("true")
+                recovered = 0
+                for index in frame.index[~parse_ok]:
+                    try:
+                        parsed = parse_annotation_json(str(frame.at[index, "raw_model_output"]))
+                    except Exception:
+                        continue
+                    for field, value in parsed.items():
+                        frame.at[index, field] = value
+                    frame.at[index, "parse_ok"] = True
+                    frame.at[index, "parse_error"] = ""
+                    frame.at[index, "reparsed_from_checkpoint"] = True
+                    recovered += 1
+                if recovered:
+                    save_dataframe(frame, path)
+                    print(f"{annotator_id}: reparsed {recovered} checkpoint rows")
                 return frame
 
             def completed_annotations(checkpoint, expected_ids):
@@ -1250,11 +1266,12 @@ def semantic_annotation_notebook() -> list[dict]:
                                 invalid = previous_output.get(record["example_id"])
                                 if invalid:
                                     base_prompt = (
-                                        "The previous response below was invalid. Return only a corrected JSON "
-                                        "object for the original request, with no Markdown.\n\nORIGINAL REQUEST:\n"
+                                        "Your previous response failed schema validation. Return only one compact "
+                                        "JSON object for the original request, with no Markdown. Every rating must "
+                                        "be an integer from 1 through 5, never 0. Empty rejected_x or asserted_y is "
+                                        "allowed when no proposition exists. Keep notes under 50 words.\n\n"
+                                        "ORIGINAL REQUEST:\n"
                                         + base_prompt
-                                        + "\n\nINVALID RESPONSE:\n"
-                                        + str(invalid)[:3000]
                                     )
                                 prompts.append(base_prompt)
                             outputs = generate_batch(

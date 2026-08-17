@@ -284,6 +284,7 @@ def parse_annotation_json(text: str) -> dict[str, Any]:
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
     decoder = json.JSONDecoder()
     parsed = None
+    parse_repairs: list[str] = []
     for match in re.finditer(r"\{", cleaned):
         try:
             candidate, _ = decoder.raw_decode(cleaned[match.start() :])
@@ -293,8 +294,27 @@ def parse_annotation_json(text: str) -> dict[str, Any]:
             parsed = candidate.get("annotation", candidate)
             break
     if not isinstance(parsed, dict):
+        try:
+            from json_repair import loads as load_repaired_json
+
+            candidate = load_repaired_json(cleaned)
+            if isinstance(candidate, dict):
+                parsed = candidate.get("annotation", candidate)
+                parse_repairs.append("json_repair")
+        except Exception:
+            pass
+    if not isinstance(parsed, dict):
         raise ValueError("No JSON object found in annotation output")
-    return normalize_annotation(parsed)
+    normalized = normalize_annotation(parsed)
+    rating_repairs = [
+        field
+        for field in RATING_FIELDS
+        if str(parsed.get(field, "")).strip() in {"0", "0.0"}
+    ]
+    if rating_repairs:
+        parse_repairs.append("zero_to_one:" + "|".join(rating_repairs))
+    normalized["annotation_parse_repairs"] = ";".join(parse_repairs)
+    return normalized
 
 
 def normalize_annotation(annotation: dict[str, Any]) -> dict[str, Any]:
@@ -303,7 +323,11 @@ def normalize_annotation(annotation: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Annotation is missing fields: {missing}")
 
     normalized: dict[str, Any] = {}
-    for field in ("rejected_x", "asserted_y", "notes"):
+    for field in ("rejected_x", "asserted_y"):
+        value = str(annotation[field]).strip()
+        normalized[field] = "" if value.lower() in {"nan", "none", "null"} else value
+
+    for field in ("notes",):
         value = str(annotation[field]).strip()
         if not value:
             raise ValueError(f"{field} must not be empty")
@@ -322,6 +346,8 @@ def normalize_annotation(annotation: dict[str, Any]) -> dict[str, Any]:
             number = float(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{field} must be an integer from 1 to 5") from exc
+        if number == 0:
+            number = 1
         if not number.is_integer() or not 1 <= number <= 5:
             raise ValueError(f"{field} must be an integer from 1 to 5")
         normalized[field] = int(number)
@@ -470,4 +496,3 @@ def weighted_rate(frame: pd.DataFrame, outcome: str, weight: str = "sample_weigh
     if not len(values) or math.isclose(float(weights.sum()), 0.0):
         return float("nan")
     return float(np.average(values, weights=weights))
-

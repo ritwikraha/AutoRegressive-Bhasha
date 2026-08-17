@@ -93,6 +93,20 @@ def test_parse_annotation_json_accepts_fences_and_rejects_invalid_ratings():
         parse_annotation_json(pd.Series(record).to_json())
 
 
+def test_parse_annotation_json_repairs_json_and_zero_based_absence():
+    record = annotation("span_1")
+    record.pop("example_id")
+    record["asserted_y"] = ""
+    record["common_misconception"] = 0
+    malformed = pd.Series(record).to_json()[:-1] + ",}"
+
+    parsed = parse_annotation_json(malformed)
+
+    assert parsed["asserted_y"] == ""
+    assert parsed["common_misconception"] == 1
+    assert "zero_to_one:common_misconception" in parsed["annotation_parse_repairs"]
+
+
 def test_compare_and_full_adjudication_resolve_semantic_outcomes():
     sample = build_span_population(detection_rows()).iloc[[0]].copy()
     example_id = sample.iloc[0]["example_id"]
