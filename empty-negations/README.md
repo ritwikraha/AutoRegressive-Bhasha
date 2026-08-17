@@ -15,9 +15,30 @@
 | Public datasets | [Hugging Face collection by search](https://huggingface.co/datasets?search=ritwikraha%2Focn-empty-negations) |
 | Source repository | [AutoRegressive-Bhasha](https://github.com/ritwikraha/AutoRegressive-Bhasha/tree/main/empty-negations) |
 
-![Research pipeline](docs/diagrams/research_pipeline.svg)
+```mermaid
+flowchart TD
+    P["Research proposal<br/>10 hypotheses"] --> Q["594 controlled prompts<br/>12 categories, 7 variants"]
+    Q --> G["9,504 generations<br/>Gemma 4 and Qwen 3.5"]
+    G --> D["Lexical detection<br/>768 raw candidate rows"]
+    D --> X["Deduplicate greedy seeds<br/>7,128 analysis responses"]
+    D --> R["472 matched rewrite pairs<br/>ready for preference scoring"]
+    D --> S["356 sampled spans<br/>three-model panel"]
+    X --> A["Clustered analysis<br/>lexical results complete"]
+    S --> A
+    S --> H["Two human audits<br/>100 items each"]
+    R --> M["Minimal viable paper"]
+    A --> M
+    H --> M
 
-Graphviz source: [research_pipeline.dot](docs/diagrams/research_pipeline.dot)
+    classDef complete fill:#d3f9d8,stroke:#495057,color:#212529
+    classDef pending fill:#ffe3e3,stroke:#495057,color:#212529
+    classDef prepared fill:#fff3bf,stroke:#495057,color:#212529
+    class A complete
+    class R,S prepared
+    class H,M pending
+```
+
+Alternative Graphviz source: [research_pipeline.dot](docs/diagrams/research_pipeline.dot)
 
 ## 1. Research Problem
 
@@ -117,9 +138,28 @@ The present evidence does **not** yet explain the full cause. It shows stable as
 
 The project is Colab-first. Each notebook reads the previous public dataset, writes checkpoints to Google Drive, logs plots to W&B, and publishes its final dataset to Hugging Face.
 
-![Main experiment design](docs/diagrams/main_experiment_design.svg)
+```mermaid
+flowchart LR
+    P["594 prompts"] --> C["12 topic categories"]
+    P --> V["7 prompt variants"]
+    P --> E["3 personas"]
+    P --> L["75 or 150 words"]
+    C --> R["9,504 stored rows"]
+    V --> R
+    E --> R
+    L --> R
+    M["4 checkpoints<br/>2 families x base/instruct"] --> R
+    D["2 decoding modes<br/>greedy and temperature 0.7"] --> R
+    S["2 seed labels"] --> R
+    R --> A["7,128 analysis rows<br/>after greedy-seed deduplication"]
 
-Graphviz source: [main_experiment_design.dot](docs/diagrams/main_experiment_design.dot)
+    classDef generated fill:#d0ebff,stroke:#495057,color:#212529
+    classDef complete fill:#d3f9d8,stroke:#495057,color:#212529
+    class R generated
+    class A complete
+```
+
+Alternative Graphviz source: [main_experiment_design.dot](docs/diagrams/main_experiment_design.dot)
 
 ### Prompt Bank
 
@@ -223,13 +263,17 @@ The semantic dataset has 356 rows in each of the `sample`, `annotator_a`, `annot
 
 ### Main Result Dashboard
 
-![Main analysis dashboard](docs/assets/figures/06_analysis_dashboard.png)
+![Main analysis dashboard](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/empty-negations/docs/assets/figures/06_analysis_dashboard.png?raw=1)
+
+[Open the main analysis dashboard in the repository](docs/assets/figures/06_analysis_dashboard.png)
 
 Source: [W&B analysis run `boihq6og`](https://wandb.ai/ritwik/ocn-empty-negations/runs/boihq6og). The same PNG is saved in Drive by notebook `06`.
 
 ### Prompt Distribution
 
-![Prompt distribution](docs/assets/figures/01_prompt_dataset_counts.png)
+![Prompt distribution](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/empty-negations/docs/assets/figures/01_prompt_dataset_counts.png?raw=1)
+
+[Open the prompt distribution figure in the repository](docs/assets/figures/01_prompt_dataset_counts.png)
 
 The prompt set is not balanced by topic because some source topics support more controlled combinations. The regression controls for category and the estimates cluster by prompt.
 
@@ -248,7 +292,9 @@ The raw detector found 768 candidate rows and 844 constructions in 9,504 stored 
 | Gemma 4 E2B Base | Temp. 0.7 | 1,188 | 2.36% | 1.52%-3.28% |
 | Gemma 4 E2B Base | Greedy | 594 | 1.35% | 0.51%-2.36% |
 
-![Lexical OCN rates](docs/assets/figures/03_lexical_ocn_rates.png)
+![Lexical OCN rates](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/empty-negations/docs/assets/figures/03_lexical_ocn_rates.png?raw=1)
+
+[Open the lexical OCN figure in the repository](docs/assets/figures/03_lexical_ocn_rates.png)
 
 #### Prompt Trends
 
@@ -314,7 +360,9 @@ Notebook `04` considered 593 unique candidate responses. It accepted 472 pairs, 
 | Gemma 4 E2B-it | 128 | 114 |
 | Gemma 4 E2B Base | 36 | 23 |
 
-![Reward-pair quality](docs/assets/figures/04_reward_pair_quality.png)
+![Reward-pair quality](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/empty-negations/docs/assets/figures/04_reward_pair_quality.png?raw=1)
+
+[Open the reward-pair figure in the repository](docs/assets/figures/04_reward_pair_quality.png)
 
 This is a dataset-construction result. It is not yet evidence that a reward model prefers OCN.
 
@@ -340,7 +388,9 @@ The panel sampled 310 unique responses containing 356 spans from a population of
 
 Taxonomy agreement between the first two models is 8.15%. Cohen's kappa is 0.002. They disagree strongly even though all three models use the same codebook. The Qwen estimate must be treated as a sensitivity result, not a prevalence claim.
 
-![Semantic annotation dashboard](docs/assets/figures/05_semantic_annotation_dashboard.png)
+![Semantic annotation dashboard](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/empty-negations/docs/assets/figures/05_semantic_annotation_dashboard.png?raw=1)
+
+[Open the semantic annotation figure in the repository](docs/assets/figures/05_semantic_annotation_dashboard.png)
 
 ### Google Drive Outputs
 
@@ -501,9 +551,22 @@ These extensions are valuable, but they are not required before the first small 
 - Extend the benchmark to Hindi, Bengali, Spanish, French, German, and Chinese.
 - Study whether synthetic teacher data transfers the style to smaller students.
 
-![Evidence status](docs/diagrams/evidence_status.svg)
+```mermaid
+flowchart TD
+    L["Observed wording<br/>Lexical OCN candidates"] --> S["Meaning in context<br/>Model-assisted labels"]
+    S --> H["Human-validated misuse<br/>TBD"]
+    H --> R["Reward preference<br/>Pairs ready, scoring TBD"]
+    R --> C["Training or internal cause<br/>DPO, LoRA, and probing TBD"]
 
-Graphviz source: [evidence_status.dot](docs/diagrams/evidence_status.dot)
+    classDef complete fill:#d3f9d8,stroke:#495057,color:#212529
+    classDef provisional fill:#fff3bf,stroke:#495057,color:#212529
+    classDef pending fill:#ffe3e3,stroke:#495057,color:#212529
+    class L complete
+    class S provisional
+    class H,R,C pending
+```
+
+Alternative Graphviz source: [evidence_status.dot](docs/diagrams/evidence_status.dot)
 
 ## 11. Way Forward
 
