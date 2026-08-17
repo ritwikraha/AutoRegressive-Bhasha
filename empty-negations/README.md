@@ -12,6 +12,7 @@ The research question is whether language models overuse these frames, especiall
 
 - `docs/research_protocol.md` - paper-oriented study design and hypotheses.
 - `docs/experiment_matrix.md` - concrete experiment menu and rollout plan.
+- `docs/semantic_annotation_results.md` - completed model-panel run, agreement diagnostics, and human-validation requirements.
 - `experiments/configs/main_gemma4_qwen35.yaml` - exact main-run model, decoding, seed, hardware, and publication manifest.
 - `annotation/codebook.md` - human annotation rules for OCN examples.
 - `dataset_cards/` - Hugging Face dataset cards for each published dataset.

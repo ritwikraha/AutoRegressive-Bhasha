@@ -10,6 +10,31 @@ tags:
   - rhetoric
   - llm-evaluation
   - semantic-annotation
+configs:
+  - config_name: sample
+    data_files:
+      - split: train
+        path: sample/train-*
+  - config_name: annotator_a
+    data_files:
+      - split: train
+        path: annotator_a/train-*
+  - config_name: annotator_b
+    data_files:
+      - split: train
+        path: annotator_b/train-*
+  - config_name: adjudicated
+    data_files:
+      - split: train
+        path: adjudicated/train-*
+  - config_name: agreement
+    data_files:
+      - split: train
+        path: agreement/train-*
+  - config_name: human_audit
+    data_files:
+      - split: train
+        path: human_audit/train-*
 ---
 
 # OCN Semantic Annotations
@@ -35,6 +60,12 @@ The taxonomy is:
 - `template_stacking`
 - `non_ocn_negation`
 - `unclear`
+
+## Main Run
+
+The main run sampled 310 unique responses containing 356 spans from a population of 593 unique candidate responses and 653 spans. The two model annotators agreed on the taxonomy for 4.2% of spans (Cohen's kappa 0.026), and 353 of 356 spans met at least one adjudication trigger. Qwen 3 14B reviewed all 356 spans.
+
+The adjudicator's population-weighted estimates were 4.4% strict misuse, 7.8% broad misuse, and 4.5% unsupported contrast. These estimates are provisional because the initial annotators showed very low agreement.
 
 ## Important Limitation
 
