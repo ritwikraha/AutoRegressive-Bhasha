@@ -1610,7 +1610,7 @@ def semantic_annotation_notebook() -> list[dict]:
                 commit_message="Add semantic annotation dataset card",
             )
 
-            fig, axes = plt.subplots(1, 3, figsize=(19, 6))
+            fig, axes = plt.subplots(1, 3, figsize=(22, 7.5))
             final["taxonomy_label"].value_counts().sort_values().plot(
                 kind="barh", ax=axes[0], color="#4c78a8"
             )
@@ -1621,8 +1621,13 @@ def semantic_annotation_notebook() -> list[dict]:
             axes[1].set_title("Inter-model agreement")
             axes[1].set_ylim(-0.1, 1)
             axes[1].tick_params(axis="x", rotation=60)
-            rate_plot = semantic_rates.melt(
-                id_vars=["model_id", "model_stage", "decoding", "sampled_spans"],
+            semantic_report = semantic_rates.copy()
+            semantic_report["report_label"] = (
+                semantic_report["model_id"].str.split("/").str[-1]
+                + " | " + semantic_report["decoding"].astype(str)
+            )
+            rate_plot = semantic_report.melt(
+                id_vars=["report_label"],
                 value_vars=[
                     "weighted_strict_misuse_rate",
                     "weighted_broad_misuse_rate",
@@ -1631,9 +1636,17 @@ def semantic_annotation_notebook() -> list[dict]:
                 var_name="metric",
                 value_name="rate",
             )
-            sns.barplot(data=rate_plot, y="model_id", x="rate", hue="metric", ax=axes[2])
-            axes[2].set_title("Weighted semantic rates")
+            sns.barplot(
+                data=rate_plot,
+                y="report_label",
+                x="rate",
+                hue="metric",
+                errorbar=None,
+                ax=axes[2],
+            )
+            axes[2].set_title("Weighted semantic rates by model and decoding")
             axes[2].set_xlim(0, 1)
+            axes[2].legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), frameon=False)
             plt.tight_layout()
             figure_path = (
                 Path(config["drive_figure_root"])

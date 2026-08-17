@@ -13,6 +13,7 @@ The research question is whether language models overuse these frames, especiall
 - `docs/research_protocol.md` - paper-oriented study design and hypotheses.
 - `docs/experiment_matrix.md` - concrete experiment menu and rollout plan.
 - `docs/semantic_annotation_results.md` - completed model-panel run, agreement diagnostics, and human-validation requirements.
+- `docs/analysis_results.md` - deduplicated lexical results, clustered regression, semantic sensitivity, and paper-facing limitations.
 - `experiments/configs/main_gemma4_qwen35.yaml` - exact main-run model, decoding, seed, hardware, and publication manifest.
 - `annotation/codebook.md` - human annotation rules for OCN examples.
 - `dataset_cards/` - Hugging Face dataset cards for each published dataset.
@@ -39,7 +40,7 @@ Run these in order:
 6. `05_annotation_sampling_and_adjudication.ipynb`
    Collapses duplicate candidates, samples unique responses within each model-by-decoding stratum, annotates every selected span with two independent open-weight models, adjudicates every item with a third model on an A100, autosaves checkpoints to Drive, publishes the semantic dataset to Hugging Face, and creates two blinded human-audit packets.
 7. `06_analysis_and_reporting.ipynb`
-   Computes lexical OCN rates, weighted semantic misuse rates, grouped tables, logistic regression, and report figures. Saves tables/plots to Drive and logs them to W&B.
+   Removes deterministic greedy-seed duplicates, computes prompt-clustered lexical intervals, response-clustered weighted semantic intervals, panel sensitivity, and a prompt-clustered binomial regression. Saves tables, a report, and plots to Drive and logs them to W&B.
 8. `07_optional_reward_model_scoring.ipynb`
    Scores reward pairs with an open reward model and publishes the score dataset.
 9. `08_optional_lora_style_intervention.ipynb`

@@ -65,11 +65,13 @@ The taxonomy is:
 - `non_ocn_negation`
 - `unclear`
 
-## Main Run
+## Calibrated Main Run
 
-The first diagnostic run sampled 310 unique responses containing 356 spans from a population of 593 unique candidate responses and 653 spans. The two model annotators agreed on the taxonomy for 4.2% of spans (Cohen's kappa 0.026), and 353 of 356 spans met at least one adjudication trigger. Qwen 3 14B reviewed all 356 spans.
+Prompt version `v2_calibrated` sampled 310 unique responses containing 356 spans from a population of 593 unique candidate responses and 653 spans. The two model annotators agreed on the taxonomy for 8.1% of spans (Cohen's kappa 0.002), and 353 of 356 spans met at least one adjudication trigger. Qwen 3 14B reviewed all 356 spans.
 
-The first adjudicator's population-weighted estimates were 4.4% strict misuse, 7.8% broad misuse, and 4.5% unsupported contrast. These diagnostic estimates are provisional because the initial annotators showed very low agreement. Later versions must be identified by `annotation_prompt_version`; model-panel versions should not be blended.
+Held-out taxonomy accuracy was 5/8 for Mistral, 2/8 for OLMo 2, and 3/8 for Qwen. The adjudicator's population-weighted estimates were 17.9% strict misuse (response-clustered 95% CI 12.9%-23.2%), 18.4% broad misuse (13.5%-23.9%), and 18.2% unsupported contrast (13.2%-23.6%). The annotators' strict rates ranged from 3.7% to 59.1%, so these are sensitivity estimates rather than stable prevalence estimates.
+
+The earlier uncalibrated diagnostic run estimated 4.4% strict misuse. Prompt versions must be analyzed separately; model-panel versions should not be blended.
 
 ## Important Limitation
 

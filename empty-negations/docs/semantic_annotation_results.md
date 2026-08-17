@@ -1,11 +1,12 @@
-# Semantic Annotation Run Results
+# Semantic Annotation Results
 
-## Run
+## Calibrated Run
 
 - Date: 2026-08-17
-- Branch commit: `d7fd7f3`
+- Branch commit: `3ff9f01`
 - Hardware: NVIDIA A100-SXM4-40GB
-- W&B: https://wandb.ai/ritwik/ocn-empty-negations/runs/uarxu57d
+- Prompt version: `v2_calibrated`
+- W&B: https://wandb.ai/ritwik/ocn-empty-negations/runs/cjowez2h
 - Hugging Face: https://huggingface.co/datasets/ritwikraha/ocn-empty-negations-semantic-main-gemma4-qwen35
 
 ## Sampling
@@ -29,42 +30,57 @@ All detected spans in a selected response were retained. The published `sample` 
 - Precision: BF16
 - Quantization: none
 
-Mistral initially produced 12 unresolved strict-parser failures. A documented parser update recovered all records by repairing malformed JSON, allowing empty X/Y propositions where the schema permits them, and mapping a model-produced `0` (absent) to scale point `1` (definitely absent). Raw outputs and repair markers remain in the annotator configuration.
+The calibrated prompt applies a fixed decision hierarchy, distinguishes support in the user prompt from support introduced by the response, and includes boundary anchors. Eight held-out cases cover eight taxonomy labels. All raw outputs and parser repair markers remain available.
+
+Held-out taxonomy accuracy was:
+
+| Panel member | Correct | Accuracy |
+| --- | ---: | ---: |
+| Mistral 7B Instruct | 5/8 | 0.625 |
+| OLMo 2 13B Instruct | 2/8 | 0.250 |
+| Qwen 3 14B adjudicator | 3/8 | 0.375 |
 
 ## Agreement
 
 | Field | Exact agreement | Within one | Cohen's kappa |
 | --- | ---: | ---: | ---: |
-| taxonomy_label | 0.042 | - | 0.026 |
-| prompt_support | 0.073 | 0.458 | 0.037 |
-| common_misconception | 0.447 | 0.584 | 0.184 |
-| x_y_distinctness | 0.267 | 0.466 | 0.022 |
-| negation_adds_meaning | 0.343 | 0.567 | 0.160 |
-| straw_position | 0.997 | 0.997 | 0.000 |
-| formulaic_ai_style | 0.966 | 0.966 | 0.279 |
-| rewrite_loss | 0.966 | 0.966 | 0.000 |
+| taxonomy_label | 0.081 | - | 0.002 |
+| prompt_support | 0.868 | 0.871 | 0.046 |
+| common_misconception | 0.736 | 0.812 | 0.065 |
+| x_y_distinctness | 0.329 | 0.348 | 0.010 |
+| negation_adds_meaning | 0.191 | 0.660 | 0.164 |
+| straw_position | 0.992 | 0.992 | 0.000 |
+| formulaic_ai_style | 0.567 | 0.902 | 0.033 |
+| rewrite_loss | 0.947 | 0.949 | -0.003 |
 
-The apparent agreement on the last three ordinal fields is prevalence-dominated: near-constant ratings produce low or zero kappa despite high exact agreement. Overall, 353 of 356 spans triggered adjudication.
+Prompt-support consistency improved substantially, but taxonomy agreement did not become reliable. Several ordinal fields remain prevalence-dominated: near-constant ratings produce low or zero kappa despite high exact agreement. Overall, 353 of 356 spans triggered adjudication.
 
 ## Adjudicated Labels
 
 | Label | Count |
 | --- | ---: |
-| genuine_contrast | 252 |
-| legitimate_pedagogy | 63 |
-| template_stacking | 17 |
-| scope_inflation | 12 |
-| empty_intensification | 6 |
-| non_ocn_negation | 6 |
+| genuine_contrast | 254 |
+| scope_inflation | 57 |
+| legitimate_pedagogy | 33 |
+| non_ocn_negation | 7 |
+| empty_intensification | 3 |
+| template_stacking | 1 |
+| presupposed_contrast | 1 |
 
-Population-weighted estimates from the adjudicator were:
+Population-weighted estimates from the adjudicator, with response-clustered bootstrap intervals, were:
 
-- Strict misuse: 0.044
-- Broad misuse: 0.078
-- Unsupported contrast: 0.045
+- Strict misuse: 0.179 (95% CI 0.129-0.232)
+- Broad misuse: 0.184 (95% CI 0.135-0.239)
+- Unsupported contrast: 0.182 (95% CI 0.132-0.236)
+
+Strict-misuse sensitivity by panel member was 0.591 for Mistral, 0.037 for OLMo 2, and 0.179 for Qwen. This spread is larger than the sampling uncertainty and is the dominant source of uncertainty.
 
 ## Interpretation
 
-This run creates a complete, reproducible model-panel dataset, not a human gold standard. The near-total taxonomy disagreement shows that open-weight judges are poorly calibrated for this pragmatic distinction under the current codebook. The adjudicated rates should therefore be treated as provisional sensitivity estimates rather than paper-ready prevalence claims.
+This run creates a complete, reproducible model-panel dataset, not a human gold standard. The decision hierarchy improved agreement on prompt support but did not resolve taxonomy instability. The adjudicated rates must therefore be treated as provisional sensitivity estimates rather than paper-ready prevalence claims.
 
-Notebook `05` saved two independently ordered 100-item human-audit packets to Google Drive. Two human annotators must complete those packets and adjudicate disagreements before the semantic rates can support the minimal viable paper.
+Notebook `05` saved two independently ordered 100-item human-audit packets to Google Drive with the `v2_calibrated` suffix. Two human annotators must complete those packets and adjudicate disagreements before the semantic rates can support the minimal viable paper.
+
+## Earlier Diagnostic Run
+
+The uncalibrated run at W&B run `uarxu57d` produced 4.2% taxonomy agreement and an adjudicator strict-misuse estimate of 0.044. It remains useful as a prompt-sensitivity diagnostic but must not be pooled with `v2_calibrated`.
