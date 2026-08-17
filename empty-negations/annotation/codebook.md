@@ -48,21 +48,28 @@ Scale convention:
 
 ## Decision Rules
 
-Use `genuine_contrast` when the user prompt directly states, asks about, or strongly implies X.
+Apply these rules in order and stop at the first clearly satisfied rule:
 
-Use `legitimate_pedagogy` when X is a widely known misconception and correcting it is useful even if the prompt did not state it.
+1. Use `non_ocn_negation` for ordinary factual negation with no rhetorical X-to-Y upgrade.
+2. Use `genuine_contrast` when the user prompt, before the model response begins, directly states or strongly implies X. The response's own mention of X is not prompt support.
+3. Use `legitimate_pedagogy` when X is a documented, widely known factual misconception and correcting it is useful even if the prompt did not state it. A merely simplistic view is not automatically a common misconception.
+4. Use `empty_intensification` when X and Y are close paraphrases, such as "leading people" versus "guiding people."
+5. Use `scope_inflation` when Y broadens X but does not actually contrast with it.
+6. Use `false_correction` when X is an implausible straw position or an unmotivated correction.
+7. Use `template_stacking` when multiple formulaic templates dominate the passage, for example `not simply`, `deeply human`, `beyond efficiency`, `trust and agency`. Do not use this label for one isolated phrase when a more specific semantic relation applies.
+8. Use `presupposed_contrast` when X is plausible but not introduced by the prompt.
+9. Use `unclear` only when the evidence remains genuinely insufficient or mixed.
 
-Use `presupposed_contrast` when X is plausible but not introduced by the prompt.
+## Calibration Boundaries
 
-Use `empty_intensification` when X and Y are close paraphrases, such as "leading people" vs "guiding people."
+- Prompt: "Explain photosynthesis." Span: "not only fuels plant growth but also releases oxygen." Label: `scope_inflation`; Y broadens the effects and the prompt did not supply X.
+- Prompt: "Some people say a library is only a warehouse for books. Explain its wider role." Span: "not just a warehouse for books; it is a civic learning space." Label: `genuine_contrast`; the prompt supplied X.
+- Prompt: "Explain evolution to a beginner." Span: "not a march toward perfection; it is change in inherited traits." Label: `legitimate_pedagogy`; teleological evolution is a recognized misconception.
+- Prompt: "Report the server status." Span: "The server is not running." Label: `non_ocn_negation`; this is factual negation.
+- Prompt: "Describe leadership." Span: "not just guiding people; it is helping people find direction." Label: `empty_intensification`; X and Y are near paraphrases.
+- Prompt: "Describe a museum." Span: "more than just a building; it is a place of memory and interpretation." Label: `presupposed_contrast`; the narrow view is plausible but unprompted.
 
-Use `scope_inflation` when Y broadens X but does not actually contrast with it.
-
-Use `false_correction` when X is an implausible straw position or an unmotivated correction.
-
-Use `template_stacking` when the issue is not only one negation but a larger formulaic register, for example `not simply`, `deeply human`, `beyond efficiency`, `trust and agency`.
-
-Use `non_ocn_negation` for ordinary factual negation, such as "Viruses are not cells."
+Notebook `05` includes a separate eight-item held-out boundary set. Report each panel member's accuracy on it, preserve every prediction, and version checkpoints whenever the prompt or codebook changes.
 
 ## Recommended Adjudication
 

@@ -35,6 +35,10 @@ configs:
     data_files:
       - split: train
         path: human_audit/train-*
+  - config_name: calibration
+    data_files:
+      - split: train
+        path: calibration/train-*
 ---
 
 # OCN Semantic Annotations
@@ -47,7 +51,7 @@ Exact duplicate generations caused by greedy seed reuse are collapsed within pro
 
 ## Annotation
 
-Two independently prompted open-weight models annotate every span using the project codebook. A third open-weight model reviews every item and supplies the final annotation. The dataset preserves both initial annotations, automatic disagreement flags, and final adjudication fields.
+Two independently prompted open-weight models annotate every span using the project codebook. A third open-weight model reviews every item and supplies the final annotation. The dataset preserves both initial annotations, automatic disagreement flags, and final adjudication fields. Prompt version `v2_calibrated` adds an explicit decision hierarchy and an eight-item held-out boundary set; the `calibration` configuration preserves every panel prediction on that set.
 
 The taxonomy is:
 
@@ -63,9 +67,9 @@ The taxonomy is:
 
 ## Main Run
 
-The main run sampled 310 unique responses containing 356 spans from a population of 593 unique candidate responses and 653 spans. The two model annotators agreed on the taxonomy for 4.2% of spans (Cohen's kappa 0.026), and 353 of 356 spans met at least one adjudication trigger. Qwen 3 14B reviewed all 356 spans.
+The first diagnostic run sampled 310 unique responses containing 356 spans from a population of 593 unique candidate responses and 653 spans. The two model annotators agreed on the taxonomy for 4.2% of spans (Cohen's kappa 0.026), and 353 of 356 spans met at least one adjudication trigger. Qwen 3 14B reviewed all 356 spans.
 
-The adjudicator's population-weighted estimates were 4.4% strict misuse, 7.8% broad misuse, and 4.5% unsupported contrast. These estimates are provisional because the initial annotators showed very low agreement.
+The first adjudicator's population-weighted estimates were 4.4% strict misuse, 7.8% broad misuse, and 4.5% unsupported contrast. These diagnostic estimates are provisional because the initial annotators showed very low agreement. Later versions must be identified by `annotation_prompt_version`; model-panel versions should not be blended.
 
 ## Important Limitation
 
@@ -79,3 +83,4 @@ These are model-assisted semantic annotations, not human gold labels. The `human
 - `adjudicated`: final panel annotation plus both initial records (`train` split).
 - `agreement`: field-level exact agreement and Cohen's kappa diagnostics (`train` split).
 - `human_audit`: blinded paper-validation packet (`train` split).
+- `calibration`: case-level held-out calibration predictions for every model-panel member (`train` split).

@@ -6,6 +6,7 @@ output_dataset: ritwikraha/ocn-empty-negations-semantic-main-gemma4-qwen35
 required_gpu: NVIDIA A100
 precision: bfloat16
 quantize_4bit: false
+annotation_prompt_version: v2_calibrated
 
 sampling:
   unit: unique response within prompt, model, and decoding
@@ -31,6 +32,16 @@ generation:
   batch_size: 8
   max_parse_attempts: 3
 
+calibration:
+  held_out_cases: 8
+  labels_covered: 8
+  publish_case_level_predictions: true
+
+uncertainty:
+  estimator: response_cluster_bootstrap
+  bootstrap_replicates: 2000
+  seed: 20260819
+
 human_validation:
   audit_sample_size: 100
   seed: 20260818
@@ -39,10 +50,12 @@ human_validation:
 outputs:
   population: ocn_semantic_span_population_main_gemma4_qwen35.csv
   sample: ocn_semantic_annotation_sample_main_gemma4_qwen35.csv
-  annotator_a: ocn_semantic_annotations_a_main_gemma4_qwen35.csv
-  annotator_b: ocn_semantic_annotations_b_main_gemma4_qwen35.csv
-  adjudications: ocn_semantic_adjudications_main_gemma4_qwen35.csv
-  final: ocn_semantic_adjudicated_main_gemma4_qwen35.csv
-  agreement: ocn_semantic_agreement_main_gemma4_qwen35.csv
-  human_audit: ocn_semantic_human_audit_main_gemma4_qwen35.csv
-
+  version_suffix: v2_calibrated
+  annotator_a: ocn_semantic_annotations_a_main_gemma4_qwen35_v2_calibrated.csv
+  annotator_b: ocn_semantic_annotations_b_main_gemma4_qwen35_v2_calibrated.csv
+  adjudications: ocn_semantic_adjudications_main_gemma4_qwen35_v2_calibrated.csv
+  final: ocn_semantic_adjudicated_main_gemma4_qwen35_v2_calibrated.csv
+  agreement: ocn_semantic_agreement_main_gemma4_qwen35_v2_calibrated.csv
+  calibration: ocn_semantic_calibration_detail_main_gemma4_qwen35_v2_calibrated.csv
+  human_audit_a: ocn_semantic_human_audit_a_main_gemma4_qwen35_v2_calibrated.csv
+  human_audit_b: ocn_semantic_human_audit_b_main_gemma4_qwen35_v2_calibrated.csv

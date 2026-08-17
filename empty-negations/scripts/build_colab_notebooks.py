@@ -1039,7 +1039,10 @@ def semantic_annotation_notebook() -> list[dict]:
 
             from ocn.annotation import (
                 ANNOTATION_FIELDS,
+                ANNOTATION_PROMPT_VERSION,
+                add_semantic_outcomes,
                 agreement_summary,
+                annotation_calibration_frame,
                 build_span_population,
                 compare_annotations,
                 finalize_adjudications,
@@ -1053,6 +1056,7 @@ def semantic_annotation_notebook() -> list[dict]:
             )
             from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, save_dataframe, utc_timestamp
             from ocn.generation import DecodingSpec, generate_batch, load_text_generation_model
+            from ocn.metrics import weighted_group_bootstrap
 
             if not torch.cuda.is_available():
                 raise RuntimeError("Notebook 05 requires an A100 GPU runtime in Colab.")
@@ -1085,6 +1089,7 @@ def semantic_annotation_notebook() -> list[dict]:
             BATCH_SIZE = int(os.environ.get("OCN_ANNOTATION_BATCH_SIZE", "8"))
             MAX_PARSE_ATTEMPTS = 3
             ADJUDICATE_ALL = True
+            PROMPT_VERSION = ANNOTATION_PROMPT_VERSION
 
             ANNOTATOR_SPECS = [
                 {
@@ -1126,6 +1131,7 @@ def semantic_annotation_notebook() -> list[dict]:
                 "annotator_models": [spec["model_id"] for spec in ANNOTATOR_SPECS],
                 "adjudicator_model": ADJUDICATOR_SPEC["model_id"],
                 "adjudicate_all": ADJUDICATE_ALL,
+                "annotation_prompt_version": PROMPT_VERSION,
             }
             run = login_wandb(
                 project="ocn-empty-negations",
@@ -1145,6 +1151,7 @@ def semantic_annotation_notebook() -> list[dict]:
                 strata=("model_id", "decoding"),
                 seed=SAMPLE_SEED,
             )
+            calibration = annotation_calibration_frame()
 
             population_path = save_dataframe(
                 population,
@@ -1180,12 +1187,18 @@ def semantic_annotation_notebook() -> list[dict]:
             print("Candidate spans:", len(population))
             print("Sampled responses:", sample["response_id"].nunique())
             print("Sampled spans:", len(sample))
+            print("Held-out calibration cases:", len(calibration))
             display(allocation)
             """
         ),
         code(
             r"""
-            checkpoint_root = Path(config["drive_data_root"]) / "semantic_annotation_runs" / EXPERIMENT_ID
+            checkpoint_root = (
+                Path(config["drive_data_root"])
+                / "semantic_annotation_runs"
+                / EXPERIMENT_ID
+                / PROMPT_VERSION
+            )
             checkpoint_root.mkdir(parents=True, exist_ok=True)
 
             def checkpoint_path_for(annotator_id):
@@ -1333,33 +1346,124 @@ def semantic_annotation_notebook() -> list[dict]:
         ),
         code(
             r"""
+            panel_items = pd.concat([sample, calibration], ignore_index=True, sort=False)
+            sample_ids = set(sample["example_id"])
+            calibration_ids = set(calibration["example_id"])
             annotation_frames = {}
+            calibration_rows = []
             for spec in ANNOTATOR_SPECS:
-                annotation_frames[spec["annotator_id"]] = run_model_annotations(
-                    sample,
+                combined_annotations = run_model_annotations(
+                    panel_items,
                     spec,
                     make_annotation_prompt,
                 )
+                annotation_frames[spec["annotator_id"]] = combined_annotations[
+                    combined_annotations["example_id"].isin(sample_ids)
+                ].copy()
+                calibration_annotations = combined_annotations[
+                    combined_annotations["example_id"].isin(calibration_ids)
+                ].merge(
+                    calibration[
+                        ["example_id", "prompt", "response", "span_text", "expected_taxonomy_label"]
+                    ],
+                    on="example_id",
+                    validate="one_to_one",
+                )
+                calibration_annotations["calibration_correct"] = (
+                    calibration_annotations["taxonomy_label"]
+                    == calibration_annotations["expected_taxonomy_label"]
+                )
+                calibration_rows.append(calibration_annotations)
 
             annotation_a = annotation_frames["annotator_a"]
             annotation_b = annotation_frames["annotator_b"]
             comparison = compare_annotations(sample, annotation_a, annotation_b)
+            calibration_a = calibration_rows[0]
+            calibration_b = calibration_rows[1]
+            calibration_comparison = compare_annotations(
+                calibration,
+                calibration_a,
+                calibration_b,
+            )
             agreement = agreement_summary(comparison)
             disagreement_count = int(comparison["adjudication_required"].sum())
+            calibration_summary = pd.DataFrame([
+                {
+                    "panel_member": ANNOTATOR_SPECS[0]["annotator_id"],
+                    "model_id": ANNOTATOR_SPECS[0]["model_id"],
+                    "taxonomy_accuracy": float(calibration_a["calibration_correct"].mean()),
+                    "correct": int(calibration_a["calibration_correct"].sum()),
+                    "total": len(calibration_a),
+                },
+                {
+                    "panel_member": ANNOTATOR_SPECS[1]["annotator_id"],
+                    "model_id": ANNOTATOR_SPECS[1]["model_id"],
+                    "taxonomy_accuracy": float(calibration_b["calibration_correct"].mean()),
+                    "correct": int(calibration_b["calibration_correct"].sum()),
+                    "total": len(calibration_b),
+                },
+            ])
             print("Flagged disagreements:", disagreement_count, "/", len(comparison))
+            display(calibration_summary)
             display(agreement)
             """
         ),
         code(
             r"""
-            adjudication_items = comparison if ADJUDICATE_ALL else comparison[
+            main_adjudication_items = comparison if ADJUDICATE_ALL else comparison[
                 comparison["adjudication_required"]
             ]
-            adjudications = run_model_annotations(
+            adjudication_items = pd.concat(
+                [main_adjudication_items, calibration_comparison],
+                ignore_index=True,
+                sort=False,
+            )
+            combined_adjudications = run_model_annotations(
                 adjudication_items,
                 ADJUDICATOR_SPEC,
                 make_adjudication_prompt,
             )
+            adjudications = combined_adjudications[
+                combined_adjudications["example_id"].isin(sample_ids)
+            ].copy()
+            calibration_adjudications = combined_adjudications[
+                combined_adjudications["example_id"].isin(calibration_ids)
+            ].merge(
+                calibration[
+                    ["example_id", "prompt", "response", "span_text", "expected_taxonomy_label"]
+                ],
+                on="example_id",
+                validate="one_to_one",
+            )
+            calibration_adjudications["calibration_correct"] = (
+                calibration_adjudications["taxonomy_label"]
+                == calibration_adjudications["expected_taxonomy_label"]
+            )
+            calibration_summary = pd.concat(
+                [
+                    calibration_summary,
+                    pd.DataFrame([{
+                        "panel_member": ADJUDICATOR_SPEC["annotator_id"],
+                        "model_id": ADJUDICATOR_SPEC["model_id"],
+                        "taxonomy_accuracy": float(
+                            calibration_adjudications["calibration_correct"].mean()
+                        ),
+                        "correct": int(calibration_adjudications["calibration_correct"].sum()),
+                        "total": len(calibration_adjudications),
+                    }]),
+                ],
+                ignore_index=True,
+            )
+            calibration_detail = pd.concat(
+                [
+                    calibration_a.assign(panel_member="annotator_a"),
+                    calibration_b.assign(panel_member="annotator_b"),
+                    calibration_adjudications.assign(panel_member="adjudicator"),
+                ],
+                ignore_index=True,
+                sort=False,
+            )
+            calibration_detail["annotation_prompt_version"] = PROMPT_VERSION
             final = finalize_adjudications(
                 comparison,
                 adjudications,
@@ -1369,6 +1473,7 @@ def semantic_annotation_notebook() -> list[dict]:
             final["annotator_b_model_id"] = ANNOTATOR_SPECS[1]["model_id"]
             final["adjudicator_model_id"] = ADJUDICATOR_SPEC["model_id"]
             final["annotation_run_id"] = ANNOTATION_RUN_ID
+            final["annotation_prompt_version"] = PROMPT_VERSION
 
             semantic_rate_rows = []
             for key, group in final.groupby(
@@ -1386,30 +1491,60 @@ def semantic_annotation_notebook() -> list[dict]:
                     }
                 )
             semantic_rates = pd.DataFrame(semantic_rate_rows)
+            semantic_intervals = weighted_group_bootstrap(
+                final,
+                outcomes=["strict_misuse", "broad_misuse", "unsupported_contrast"],
+                group_columns=["model_id", "model_stage", "decoding"],
+                cluster_column="response_id",
+                weight_column="sample_weight",
+                n_boot=2000,
+                seed=20260819,
+            )
             display(semantic_rates)
+            display(calibration_summary)
             """
         ),
         code(
             r"""
             final_path = save_dataframe(
                 final,
-                Path(config["drive_data_root"]) / "ocn_semantic_adjudicated_main_gemma4_qwen35.csv",
+                Path(config["drive_data_root"])
+                / f"ocn_semantic_adjudicated_main_gemma4_qwen35_{PROMPT_VERSION}.csv",
             )
             agreement_path = save_dataframe(
                 agreement,
-                Path(config["drive_data_root"]) / "ocn_semantic_agreement_main_gemma4_qwen35.csv",
+                Path(config["drive_data_root"])
+                / f"ocn_semantic_agreement_main_gemma4_qwen35_{PROMPT_VERSION}.csv",
             )
             annotation_a_path = save_dataframe(
                 annotation_a,
-                Path(config["drive_data_root"]) / "ocn_semantic_annotations_a_main_gemma4_qwen35.csv",
+                Path(config["drive_data_root"])
+                / f"ocn_semantic_annotations_a_main_gemma4_qwen35_{PROMPT_VERSION}.csv",
             )
             annotation_b_path = save_dataframe(
                 annotation_b,
-                Path(config["drive_data_root"]) / "ocn_semantic_annotations_b_main_gemma4_qwen35.csv",
+                Path(config["drive_data_root"])
+                / f"ocn_semantic_annotations_b_main_gemma4_qwen35_{PROMPT_VERSION}.csv",
             )
             adjudication_path = save_dataframe(
                 adjudications,
-                Path(config["drive_data_root"]) / "ocn_semantic_adjudications_main_gemma4_qwen35.csv",
+                Path(config["drive_data_root"])
+                / f"ocn_semantic_adjudications_main_gemma4_qwen35_{PROMPT_VERSION}.csv",
+            )
+            calibration_path = save_dataframe(
+                calibration_summary,
+                Path(config["drive_data_root"])
+                / f"ocn_semantic_calibration_main_gemma4_qwen35_{PROMPT_VERSION}.csv",
+            )
+            calibration_detail_path = save_dataframe(
+                calibration_detail,
+                Path(config["drive_data_root"])
+                / f"ocn_semantic_calibration_detail_main_gemma4_qwen35_{PROMPT_VERSION}.csv",
+            )
+            semantic_intervals_path = save_dataframe(
+                semantic_intervals,
+                Path(config["drive_data_root"])
+                / f"ocn_semantic_intervals_main_gemma4_qwen35_{PROMPT_VERSION}.csv",
             )
 
             audit_n = min(HUMAN_AUDIT_N, len(final))
@@ -1434,16 +1569,19 @@ def semantic_annotation_notebook() -> list[dict]:
             )
             human_audit_a_path = save_dataframe(
                 human_audit_a,
-                Path(config["drive_data_root"]) / "ocn_semantic_human_audit_a_main_gemma4_qwen35.csv",
+                Path(config["drive_data_root"])
+                / f"ocn_semantic_human_audit_a_main_gemma4_qwen35_{PROMPT_VERSION}.csv",
             )
             human_audit_b_path = save_dataframe(
                 human_audit_b,
-                Path(config["drive_data_root"]) / "ocn_semantic_human_audit_b_main_gemma4_qwen35.csv",
+                Path(config["drive_data_root"])
+                / f"ocn_semantic_human_audit_b_main_gemma4_qwen35_{PROMPT_VERSION}.csv",
             )
 
             public_audit = human_audit_source[
                 ["example_id", "prompt", "response", "span_text", "model_id", "decoding"]
             ].copy()
+            public_audit["annotation_prompt_version"] = PROMPT_VERSION
             hub_configs = {
                 "sample": sample,
                 "annotator_a": annotation_a,
@@ -1451,6 +1589,7 @@ def semantic_annotation_notebook() -> list[dict]:
                 "adjudicated": final,
                 "agreement": agreement,
                 "human_audit": public_audit,
+                "calibration": calibration_detail,
             }
             for config_name, frame in hub_configs.items():
                 Dataset.from_pandas(frame, preserve_index=False).push_to_hub(
@@ -1496,7 +1635,10 @@ def semantic_annotation_notebook() -> list[dict]:
             axes[2].set_title("Weighted semantic rates")
             axes[2].set_xlim(0, 1)
             plt.tight_layout()
-            figure_path = Path(config["drive_figure_root"]) / "05_semantic_annotation_main_gemma4_qwen35.png"
+            figure_path = (
+                Path(config["drive_figure_root"])
+                / f"05_semantic_annotation_main_gemma4_qwen35_{PROMPT_VERSION}.png"
+            )
             fig.savefig(figure_path, dpi=180, bbox_inches="tight")
 
             wandb.log({
@@ -1512,6 +1654,9 @@ def semantic_annotation_notebook() -> list[dict]:
                 "sampling_allocation": wandb.Table(dataframe=allocation),
                 "agreement": wandb.Table(dataframe=agreement),
                 "semantic_rates": wandb.Table(dataframe=semantic_rates),
+                "semantic_intervals": wandb.Table(dataframe=semantic_intervals),
+                "calibration": wandb.Table(dataframe=calibration_summary),
+                "calibration_detail": wandb.Table(dataframe=calibration_detail),
                 "adjudicated_sample": wandb.Table(dataframe=final),
                 "semantic_annotation_dashboard": wandb.Image(str(figure_path)),
             })
@@ -1520,6 +1665,9 @@ def semantic_annotation_notebook() -> list[dict]:
             print("Saved sample:", sample_path)
             print("Saved final annotations:", final_path)
             print("Saved agreement:", agreement_path)
+            print("Saved calibration:", calibration_path)
+            print("Saved calibration detail:", calibration_detail_path)
+            print("Saved semantic intervals:", semantic_intervals_path)
             print("Human audit packets:", human_audit_a_path, human_audit_b_path)
             print("Published:", f"https://huggingface.co/datasets/{MAIN_SEMANTIC_REPO}")
             print("Figure:", figure_path)
@@ -1534,7 +1682,9 @@ def analysis_notebook() -> list[dict]:
             """
             # 06 - Analysis And Reporting
 
-            This notebook loads both lexical detections and adjudicated semantic labels, computes model/category/persona effects and weighted semantic misuse estimates, saves report tables and plots to Google Drive, and logs them to W&B.
+            This notebook produces the paper-facing analysis while keeping lexical detection and model-panel semantics separate. It removes deterministic greedy seed duplicates, reports interval estimates, fits a prompt-clustered binomial model, and treats the two annotators plus adjudicator as a sensitivity analysis rather than human ground truth.
+
+            A GPU is not required. Run notebook `05` first so the latest calibrated semantic configurations are available on Hugging Face.
             """
         ),
         code(COMMON_BOOTSTRAP),
@@ -1543,20 +1693,29 @@ def analysis_notebook() -> list[dict]:
             import json
             from pathlib import Path
             import matplotlib.pyplot as plt
+            import numpy as np
             import pandas as pd
             import seaborn as sns
+            import statsmodels.api as sm
             import statsmodels.formula.api as smf
             import wandb
             from datasets import load_dataset
 
-            from ocn.annotation import weighted_rate
+            from ocn.annotation import add_semantic_outcomes
             from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, save_dataframe, utc_timestamp
-            from ocn.metrics import detection_summary, grouped_ocn_rates, top_patterns
+            from ocn.metrics import (
+                deduplicate_greedy_seed_reuse,
+                detection_summary,
+                grouped_ocn_rates_with_ci,
+                top_patterns,
+                weighted_group_bootstrap,
+            )
 
             paths = make_colab_paths()
             config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
             _ = login_huggingface("HF_WRITE_ACCESS")
             EXPERIMENT_ID = "main_gemma4_qwen35"
+            ANALYSIS_VERSION = "v2_robust"
             ANALYSIS_RUN_ID = utc_timestamp()
             MAIN_DETECTION_REPO = config.get(
                 "hf_main_detection_repo",
@@ -1570,8 +1729,12 @@ def analysis_notebook() -> list[dict]:
                 **config,
                 "experiment_id": EXPERIMENT_ID,
                 "analysis_run_id": ANALYSIS_RUN_ID,
+                "analysis_version": ANALYSIS_VERSION,
                 "detection_repo": MAIN_DETECTION_REPO,
                 "semantic_repo": MAIN_SEMANTIC_REPO,
+                "greedy_seed_deduplication": True,
+                "regression_covariance": "prompt_clustered",
+                "semantic_bootstrap_replicates": 2000,
             }
             run = login_wandb(
                 project="ocn-empty-negations",
@@ -1583,98 +1746,252 @@ def analysis_notebook() -> list[dict]:
         ),
         code(
             r"""
-            df = load_dataset(MAIN_DETECTION_REPO, split="train").to_pandas()
+            raw_df = load_dataset(MAIN_DETECTION_REPO, split="train").to_pandas()
+            df = deduplicate_greedy_seed_reuse(raw_df)
             semantics = load_dataset(
                 MAIN_SEMANTIC_REPO, "adjudicated", split="train"
             ).to_pandas()
+            calibration = load_dataset(
+                MAIN_SEMANTIC_REPO, "calibration", split="train"
+            ).to_pandas()
+
+            duplicate_audit = pd.DataFrame([{
+                "raw_rows": len(raw_df),
+                "analysis_rows": len(df),
+                "removed_greedy_seed_duplicates": len(raw_df) - len(df),
+                "raw_greedy_rows": int(raw_df["decoding"].eq("greedy").sum()),
+                "analysis_greedy_rows": int(df["decoding"].eq("greedy").sum()),
+            }])
             summary = detection_summary(df)
-            model_rates = grouped_ocn_rates(df, ["model_id", "model_stage", "decoding"])
-            prompt_rates = grouped_ocn_rates(df, ["category", "variant", "persona"])
-            semantic_rate_rows = []
-            for key, group in semantics.groupby(
-                ["model_id", "model_stage", "decoding"], dropna=False
-            ):
-                semantic_rate_rows.append({
-                    "model_id": key[0],
-                    "model_stage": key[1],
-                    "decoding": key[2],
-                    "sampled_spans": len(group),
-                    "weighted_strict_misuse_rate": weighted_rate(group, "strict_misuse"),
-                    "weighted_broad_misuse_rate": weighted_rate(group, "broad_misuse"),
-                    "weighted_unsupported_contrast_rate": weighted_rate(group, "unsupported_contrast"),
-                })
-            semantic_rates = pd.DataFrame(semantic_rate_rows)
-            save_dataframe(model_rates, Path(config["drive_data_root"]) / "report_model_rates_main_gemma4_qwen35.csv")
-            save_dataframe(prompt_rates, Path(config["drive_data_root"]) / "report_prompt_rates_main_gemma4_qwen35.csv")
-            save_dataframe(semantic_rates, Path(config["drive_data_root"]) / "report_semantic_rates_main_gemma4_qwen35.csv")
-            summary
+            model_rates = grouped_ocn_rates_with_ci(
+                df,
+                ["model_id", "model_stage", "model_family", "decoding"],
+                cluster_column="prompt_id",
+                n_boot=2000,
+                seed=20260821,
+            )
+            variant_rates = grouped_ocn_rates_with_ci(
+                df, ["variant"], cluster_column="prompt_id", n_boot=2000, seed=20260822
+            )
+            persona_rates = grouped_ocn_rates_with_ci(
+                df, ["persona"], cluster_column="prompt_id", n_boot=2000, seed=20260823
+            )
+            category_rates = grouped_ocn_rates_with_ci(
+                df, ["category"], cluster_column="prompt_id", n_boot=2000, seed=20260824
+            )
+            patterns = top_patterns(df, 12)
+
+            output_root = Path(config["drive_data_root"]) / "analysis" / EXPERIMENT_ID / ANALYSIS_VERSION
+            output_root.mkdir(parents=True, exist_ok=True)
+            save_dataframe(duplicate_audit, output_root / "deduplication_audit.csv")
+            save_dataframe(model_rates, output_root / "lexical_model_rates.csv")
+            save_dataframe(variant_rates, output_root / "lexical_variant_rates.csv")
+            save_dataframe(persona_rates, output_root / "lexical_persona_rates.csv")
+            save_dataframe(category_rates, output_root / "lexical_category_rates.csv")
+            save_dataframe(patterns, output_root / "lexical_patterns.csv")
+            display(duplicate_audit)
+            display(summary.to_frame("value"))
+            """
+        ),
+        code(
+            r"""
+            panel_frames = []
+            panel_specs = [
+                ("annotator_a", "a_taxonomy_label", "a_prompt_support"),
+                ("annotator_b", "b_taxonomy_label", "b_prompt_support"),
+                ("adjudicator", "taxonomy_label", "prompt_support"),
+            ]
+            for panel_source, taxonomy_column, support_column in panel_specs:
+                panel = add_semantic_outcomes(
+                    semantics,
+                    taxonomy_column=taxonomy_column,
+                    prompt_support_column=support_column,
+                )
+                panel["panel_source"] = panel_source
+                panel_frames.append(panel)
+            semantic_sensitivity_rows = pd.concat(panel_frames, ignore_index=True, sort=False)
+
+            semantic_overall = weighted_group_bootstrap(
+                semantic_sensitivity_rows,
+                outcomes=["strict_misuse", "broad_misuse", "unsupported_contrast"],
+                group_columns=["panel_source"],
+                cluster_column="response_id",
+                weight_column="sample_weight",
+                n_boot=2000,
+                seed=20260819,
+            )
+            semantic_by_model = weighted_group_bootstrap(
+                semantic_sensitivity_rows,
+                outcomes=["strict_misuse", "broad_misuse", "unsupported_contrast"],
+                group_columns=["panel_source", "model_id", "model_stage", "decoding"],
+                cluster_column="response_id",
+                weight_column="sample_weight",
+                n_boot=2000,
+                seed=20260820,
+            )
+            calibration_summary = (
+                calibration.groupby(["panel_member", "annotator_model_id"], dropna=False)
+                .agg(
+                    calibration_cases=("example_id", "size"),
+                    calibration_correct=("calibration_correct", "sum"),
+                )
+                .reset_index()
+            )
+            calibration_summary["calibration_accuracy"] = (
+                calibration_summary["calibration_correct"]
+                / calibration_summary["calibration_cases"]
+            )
+            save_dataframe(semantic_overall, output_root / "semantic_panel_sensitivity_overall.csv")
+            save_dataframe(semantic_by_model, output_root / "semantic_panel_sensitivity_by_model.csv")
+            save_dataframe(calibration_summary, output_root / "semantic_panel_calibration.csv")
+            display(semantic_overall)
+            display(calibration_summary)
             """
         ),
         code(
             r"""
             regression_df = df.copy()
             regression_df["has_ocn_int"] = regression_df["has_ocn"].astype(int)
-            formula = "has_ocn_int ~ C(model_stage) + C(model_family) + C(decoding) + C(variant) + C(persona) + length_target"
-            model = smf.logit(formula, data=regression_df).fit(disp=False)
-            report_path = Path(config["drive_data_root"]) / "logit_model_summary_main_gemma4_qwen35.txt"
+            formula = (
+                "has_ocn_int ~ C(model_stage) * C(model_family) + C(decoding) + "
+                "C(variant) + C(persona) + C(category) + length_target"
+            )
+            model = smf.glm(
+                formula,
+                data=regression_df,
+                family=sm.families.Binomial(),
+            ).fit(
+                cov_type="cluster",
+                cov_kwds={"groups": regression_df["prompt_id"]},
+            )
+            confidence = model.conf_int()
+            coefficient_table = pd.DataFrame({
+                "term": model.params.index,
+                "log_odds": model.params.values,
+                "clustered_std_error": model.bse.values,
+                "p_value": model.pvalues.values,
+                "odds_ratio": np.exp(model.params.values),
+                "odds_ratio_ci_low": np.exp(confidence[0].values),
+                "odds_ratio_ci_high": np.exp(confidence[1].values),
+            })
+            report_path = output_root / "clustered_binomial_model_summary.txt"
             report_path.write_text(model.summary().as_text(), encoding="utf-8")
+            save_dataframe(coefficient_table, output_root / "clustered_binomial_coefficients.csv")
             print(model.summary())
             """
         ),
         code(
             r"""
-            fig, axes = plt.subplots(2, 3, figsize=(21, 12))
-            sns.barplot(data=model_rates, y="model_id", x="ocn_rate", hue="decoding", ax=axes[0, 0])
-            axes[0, 0].set_title("OCN rate by model and decoding")
-            axes[0, 0].set_xlim(0, 1)
+            def interval_dotplot(frame, label_column, rate_column, low_column, high_column, ax, color):
+                plot = frame.sort_values(rate_column).reset_index(drop=True)
+                positions = np.arange(len(plot))
+                ax.errorbar(
+                    plot[rate_column],
+                    positions,
+                    xerr=np.vstack([
+                        plot[rate_column] - plot[low_column],
+                        plot[high_column] - plot[rate_column],
+                    ]),
+                    fmt="o",
+                    color=color,
+                    ecolor=color,
+                    capsize=3,
+                )
+                ax.set_yticks(positions, plot[label_column])
+                ax.set_xlim(0, 1)
 
-            variant_rates = grouped_ocn_rates(df, ["variant"])
-            sns.barplot(data=variant_rates, y="variant", x="ocn_rate", ax=axes[0, 1], color="#f58518")
-            axes[0, 1].set_title("OCN rate by prompt variant")
-            axes[0, 1].set_xlim(0, 1)
+            fig, axes = plt.subplots(2, 3, figsize=(22, 13))
+            model_plot = model_rates.copy()
+            model_plot["label"] = (
+                model_plot["model_id"].str.split("/").str[-1]
+                + " | " + model_plot["decoding"].astype(str)
+            )
+            interval_dotplot(
+                model_plot, "label", "ocn_rate", "ocn_rate_ci_low", "ocn_rate_ci_high",
+                axes[0, 0], "#35618f",
+            )
+            axes[0, 0].set_title("Lexical OCN rate by model and decoding")
 
-            persona_rates = grouped_ocn_rates(df, ["persona"])
-            sns.barplot(data=persona_rates, y="persona", x="ocn_rate", ax=axes[1, 0], color="#54a24b")
-            axes[1, 0].set_title("OCN rate by persona")
-            axes[1, 0].set_xlim(0, 1)
+            interval_dotplot(
+                variant_rates, "variant", "ocn_rate", "ocn_rate_ci_low", "ocn_rate_ci_high",
+                axes[0, 1], "#e17829",
+            )
+            axes[0, 1].set_title("Lexical OCN rate by prompt variant")
 
-            patterns = top_patterns(df, 12)
-            sns.barplot(data=patterns, y="pattern", x="count", ax=axes[1, 1], color="#b279a2")
-            axes[1, 1].set_title("Top detector patterns")
+            sns.barplot(data=patterns, y="pattern", x="count", ax=axes[0, 2], color="#6f8f5d")
+            axes[0, 2].set_title("Top lexical detector patterns")
 
             semantics["taxonomy_label"].value_counts().sort_values().plot(
-                kind="barh", ax=axes[0, 2], color="#e45756"
+                kind="barh", ax=axes[1, 0], color="#bd4d4d"
             )
-            axes[0, 2].set_title("Adjudicated semantic taxonomy")
+            axes[1, 0].set_title("Adjudicator taxonomy (model-assisted)")
 
-            semantic_plot = semantic_rates.melt(
-                id_vars=["model_id", "model_stage", "decoding", "sampled_spans"],
-                value_vars=[
-                    "weighted_strict_misuse_rate",
-                    "weighted_broad_misuse_rate",
-                    "weighted_unsupported_contrast_rate",
-                ],
-                var_name="metric",
-                value_name="rate",
+            sensitivity_plot = semantic_overall.copy()
+            interval_dotplot(
+                sensitivity_plot,
+                "panel_source",
+                "strict_misuse_rate",
+                "strict_misuse_ci_low",
+                "strict_misuse_ci_high",
+                axes[1, 1],
+                "#71588f",
             )
-            sns.barplot(data=semantic_plot, y="model_id", x="rate", hue="metric", ax=axes[1, 2])
-            axes[1, 2].set_title("Weighted semantic rates")
+            axes[1, 1].set_title("Strict misuse sensitivity by panel member")
+
+            calibration_plot = calibration_summary.copy()
+            calibration_plot["label"] = calibration_plot["panel_member"]
+            sns.barplot(
+                data=calibration_plot,
+                y="label",
+                x="calibration_accuracy",
+                ax=axes[1, 2],
+                color="#2d8b84",
+            )
+            axes[1, 2].axvline(1 / 8, color="black", linestyle="--", linewidth=1)
             axes[1, 2].set_xlim(0, 1)
+            axes[1, 2].set_title("Held-out calibration accuracy")
             plt.tight_layout()
 
-            fig_path = Path(config["drive_figure_root"]) / "06_analysis_dashboard_main_gemma4_qwen35.png"
+            figure_root = Path(config["drive_figure_root"]) / "analysis" / EXPERIMENT_ID / ANALYSIS_VERSION
+            figure_root.mkdir(parents=True, exist_ok=True)
+            fig_path = figure_root / "06_analysis_dashboard.png"
             fig.savefig(fig_path, dpi=180, bbox_inches="tight")
+
+            report_markdown = f'''# OCN Main Analysis ({ANALYSIS_VERSION})
+
+            - Raw generation rows: {len(raw_df):,}
+            - Analysis rows after deterministic greedy deduplication: {len(df):,}
+            - Removed greedy seed duplicates: {len(raw_df) - len(df):,}
+            - Lexical OCN rate: {summary['ocn_rate']:.3f}
+            - Prompt-clustered binomial regression: `{formula}`
+            - Semantic estimates: response-cluster bootstrap with 2,000 replicates
+
+            Semantic results are model-panel sensitivity estimates. They are not human-gold prevalence estimates and remain provisional until the blinded audit is independently annotated and adjudicated.
+            '''
+            report_markdown = "\n".join(line.strip() for line in report_markdown.splitlines()).strip() + "\n"
+            report_md_path = output_root / "analysis_report.md"
+            report_md_path.write_text(report_markdown, encoding="utf-8")
+
             wandb.log({
                 **summary.to_dict(),
+                "raw_rows": len(raw_df),
+                "analysis_rows": len(df),
+                "removed_greedy_seed_duplicates": len(raw_df) - len(df),
                 "analysis_dashboard": wandb.Image(str(fig_path)),
                 "model_rates": wandb.Table(dataframe=model_rates),
-                "prompt_rates": wandb.Table(dataframe=prompt_rates),
-                "semantic_rates": wandb.Table(dataframe=semantic_rates),
-                "semantic_annotations": wandb.Table(dataframe=semantics),
-                "logit_summary": model.summary().as_text(),
+                "variant_rates": wandb.Table(dataframe=variant_rates),
+                "persona_rates": wandb.Table(dataframe=persona_rates),
+                "category_rates": wandb.Table(dataframe=category_rates),
+                "semantic_panel_sensitivity": wandb.Table(dataframe=semantic_overall),
+                "semantic_panel_sensitivity_by_model": wandb.Table(dataframe=semantic_by_model),
+                "semantic_panel_calibration": wandb.Table(dataframe=calibration_summary),
+                "clustered_binomial_coefficients": wandb.Table(dataframe=coefficient_table),
+                "clustered_binomial_summary": model.summary().as_text(),
             })
             run.finish()
-            fig_path
+            print("Saved analysis tables:", output_root)
+            print("Saved dashboard:", fig_path)
+            print("Saved report:", report_md_path)
             """
         ),
     ]

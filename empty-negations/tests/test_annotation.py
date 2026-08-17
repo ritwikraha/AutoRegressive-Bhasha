@@ -3,10 +3,13 @@ import pytest
 
 from ocn.annotation import (
     ANNOTATION_FIELDS,
+    ANNOTATION_PROMPT_VERSION,
     agreement_summary,
+    annotation_calibration_frame,
     build_span_population,
     compare_annotations,
     finalize_adjudications,
+    make_annotation_prompt,
     parse_annotation_json,
     stratified_response_sample,
 )
@@ -139,3 +142,15 @@ def test_agreement_summary_reports_taxonomy_and_rating_metrics():
 
     assert len(summary) == 8
     assert summary.loc[summary["field"].eq("taxonomy_label"), "exact_agreement"].item() == 1.0
+
+
+def test_calibration_cases_cover_distinct_boundaries_and_prompt_is_explicit():
+    calibration = annotation_calibration_frame()
+    prompt = make_annotation_prompt(calibration.iloc[0].to_dict())
+
+    assert ANNOTATION_PROMPT_VERSION == "v2_calibrated"
+    assert len(calibration) == 8
+    assert calibration["expected_taxonomy_label"].nunique() == 8
+    assert "considers only the USER PROMPT" in prompt
+    assert "Apply this order" in prompt
+    assert "Calibration anchors" in prompt

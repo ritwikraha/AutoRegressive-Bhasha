@@ -25,6 +25,8 @@ TAXONOMY_LABELS: tuple[str, ...] = (
     "unclear",
 )
 
+ANNOTATION_PROMPT_VERSION = "v2_calibrated"
+
 RATING_FIELDS: tuple[str, ...] = (
     "prompt_support",
     "common_misconception",
@@ -54,16 +56,108 @@ BROAD_MISUSE_LABELS = STRICT_MISUSE_LABELS | {
 }
 
 _LABEL_GUIDE = """
-- genuine_contrast: the prompt or preceding discourse supplies the rejected proposition X.
-- legitimate_pedagogy: X is a well-known misconception whose correction is useful here.
+- genuine_contrast: the USER PROMPT, before the model response begins, explicitly supplies or strongly implies the rejected proposition X. Do not count the response's own mention of X as prompt support.
+- legitimate_pedagogy: X is a widely recognized factual misconception whose correction is useful here. A merely simplistic or narrow view is not automatically a common misconception.
 - presupposed_contrast: X is plausible but was not introduced by the prompt.
 - empty_intensification: X and Y are near paraphrases or the contrast adds no substance.
 - scope_inflation: Y merely broadens X rather than genuinely contrasting with it.
 - false_correction: X is an implausible straw position or unmotivated correction.
-- template_stacking: the construction belongs to a larger cluster of formulaic assistant rhetoric.
+- template_stacking: several formulaic rhetorical templates cluster in the response and that stacking is the dominant issue. Do not use this label for one isolated phrase when a more specific relation applies.
 - non_ocn_negation: this is ordinary factual negation, not rhetorical contrastive negation.
 - unclear: evidence is genuinely insufficient or mixed.
 """.strip()
+
+_DECISION_ORDER = """
+Apply this order and stop at the first clearly satisfied rule:
+1. Ordinary factual negation with no rhetorical X-to-Y upgrade -> non_ocn_negation.
+2. The user prompt itself supplies X -> genuine_contrast.
+3. X is a documented, widely known factual misconception -> legitimate_pedagogy.
+4. X and Y are near paraphrases -> empty_intensification.
+5. Y includes, expands, or lists consequences of X without incompatibility -> scope_inflation.
+6. X is implausible or unmotivated -> false_correction.
+7. Multiple formulaic templates dominate the passage -> template_stacking.
+8. X is plausible but unprompted -> presupposed_contrast.
+9. Otherwise -> unclear.
+""".strip()
+
+_CALIBRATION_ANCHORS = """
+Calibration anchors:
+
+A. Prompt: "Explain photosynthesis." Response span: "Photosynthesis not only fuels plant growth but also releases oxygen." Label: scope_inflation. The user did not supply X, and Y broadens the effects of the process.
+
+B. Prompt: "Some people say a library is only a warehouse for books. Explain its wider role." Response span: "A library is not just a warehouse for books; it is a civic learning space." Label: genuine_contrast. The user explicitly supplied X.
+
+C. Prompt: "Explain evolution to a beginner." Response span: "Evolution is not a march toward perfection; it is change in inherited traits across generations." Label: legitimate_pedagogy. The rejected teleological view is a widely recognized misconception.
+
+D. Prompt: "Report the server status." Response span: "The server is not running." Label: non_ocn_negation. This is factual negation without a rhetorical upgrade.
+
+E. Prompt: "Describe leadership." Response span: "Leadership is not just guiding people; it is helping people find direction." Label: empty_intensification. X and Y are near paraphrases.
+
+F. Prompt: "Describe a museum." Response span: "A museum is more than just a building; it is a place of memory and interpretation." Label: presupposed_contrast. The narrow view is plausible but was not supplied by the user.
+""".strip()
+
+
+def annotation_calibration_frame() -> pd.DataFrame:
+    """Return held-out boundary cases for reporting prompt calibration accuracy."""
+    rows = [
+        {
+            "example_id": "calibration_genuine",
+            "prompt": "A manager claims remote work is only a cost-cutting tool. Explain what that misses.",
+            "response": "Remote work is not merely a cost-cutting tool; it also changes coordination, hiring, and employee autonomy.",
+            "span_text": "not merely a cost-cutting tool; it also",
+            "expected_taxonomy_label": "genuine_contrast",
+        },
+        {
+            "example_id": "calibration_legitimate",
+            "prompt": "Explain how antibiotics work.",
+            "response": "Antibiotics are not a cure for viral infections; they target susceptible bacteria.",
+            "span_text": "not a cure for viral infections; they target susceptible bacteria",
+            "expected_taxonomy_label": "legitimate_pedagogy",
+        },
+        {
+            "example_id": "calibration_scope",
+            "prompt": "Describe the value of public parks.",
+            "response": "A public park is not just green space; it also supports exercise, cooling, and community events.",
+            "span_text": "not just green space; it also",
+            "expected_taxonomy_label": "scope_inflation",
+        },
+        {
+            "example_id": "calibration_empty",
+            "prompt": "Define mentoring.",
+            "response": "Mentoring is not merely offering guidance; it is guiding someone through growth.",
+            "span_text": "not merely offering guidance; it is guiding someone",
+            "expected_taxonomy_label": "empty_intensification",
+        },
+        {
+            "example_id": "calibration_false",
+            "prompt": "Describe a basic calendar application.",
+            "response": "A calendar app is not just a grid of dates; it is a declaration that time can be conquered.",
+            "span_text": "not just a grid of dates; it is a declaration that time can be conquered",
+            "expected_taxonomy_label": "false_correction",
+        },
+        {
+            "example_id": "calibration_template",
+            "prompt": "Describe customer support software.",
+            "response": "It is not just a ticketing tool. It goes beyond efficiency to create deeply human connections, trust, and agency.",
+            "span_text": "not just a ticketing tool. It goes beyond efficiency",
+            "expected_taxonomy_label": "template_stacking",
+        },
+        {
+            "example_id": "calibration_non_ocn",
+            "prompt": "State whether the sample contains lead.",
+            "response": "The sample does not contain detectable lead.",
+            "span_text": "does not contain detectable lead",
+            "expected_taxonomy_label": "non_ocn_negation",
+        },
+        {
+            "example_id": "calibration_presupposed",
+            "prompt": "Describe a university.",
+            "response": "A university is more than just classrooms; it is a community for research and public service.",
+            "span_text": "more than just classrooms; it is a community",
+            "expected_taxonomy_label": "presupposed_contrast",
+        },
+    ]
+    return pd.DataFrame(rows)
 
 
 def _stable_id(prefix: str, *parts: Any) -> str:
@@ -218,6 +312,11 @@ You are one independent research annotator. Evaluate exactly one detected rhetor
 Taxonomy:
 {_LABEL_GUIDE}
 
+Decision procedure:
+{_DECISION_ORDER}
+
+{_CALIBRATION_ANCHORS}
+
 Use integer ratings where 1=definitely no/absent, 2=probably no, 3=unclear or mixed, 4=probably yes, and 5=definitely yes/strong.
 
 PROMPT:
@@ -228,6 +327,11 @@ FULL RESPONSE:
 
 DETECTED SPAN:
 {record['span_text']}
+
+Critical boundary checks:
+- `prompt_support` considers only the USER PROMPT, never wording introduced inside the model response.
+- `common_misconception` is high only for a widely recognized factual misconception, not any shallow interpretation.
+- Choose one dominant taxonomy label using the decision order, even if secondary stylistic issues are present.
 
 Return only one JSON object with exactly these keys:
 {{"rejected_x":"...","asserted_y":"...","taxonomy_label":"one allowed label","prompt_support":1,"common_misconception":1,"x_y_distinctness":1,"negation_adds_meaning":1,"straw_position":1,"formulaic_ai_style":1,"rewrite_loss":1,"notes":"brief evidence-based rationale"}}
@@ -254,6 +358,9 @@ You are the adjudicator for a semantic annotation study. Independently inspect t
 
 Taxonomy:
 {_LABEL_GUIDE}
+
+Decision procedure:
+{_DECISION_ORDER}
 
 PROMPT:
 {record['prompt']}
@@ -293,6 +400,16 @@ def parse_annotation_json(text: str) -> dict[str, Any]:
         if isinstance(candidate, dict):
             parsed = candidate.get("annotation", candidate)
             break
+    if not isinstance(parsed, dict):
+        trailing_comma_repaired = re.sub(r",\s*([}\]])", r"\1", cleaned)
+        if trailing_comma_repaired != cleaned:
+            try:
+                candidate = json.loads(trailing_comma_repaired)
+                if isinstance(candidate, dict):
+                    parsed = candidate.get("annotation", candidate)
+                    parse_repairs.append("trailing_comma")
+            except json.JSONDecodeError:
+                pass
     if not isinstance(parsed, dict):
         try:
             from json_repair import loads as load_repaired_json
@@ -347,7 +464,7 @@ def normalize_annotation(annotation: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{field} must be an integer from 1 to 5") from exc
         if number == 0:
-            number = 1
+            number = 1.0
         if not number.is_integer() or not 1 <= number <= 5:
             raise ValueError(f"{field} must be an integer from 1 to 5")
         normalized[field] = int(number)
@@ -476,18 +593,27 @@ def finalize_adjudications(
     final["annotation_method"] = (
         "oss_panel_full_adjudication" if adjudicate_all else "oss_panel_disagreement_adjudication"
     )
-    final["strict_misuse"] = final["taxonomy_label"].isin(STRICT_MISUSE_LABELS)
-    final["broad_misuse"] = final["taxonomy_label"].isin(BROAD_MISUSE_LABELS)
-    final["unsupported_contrast"] = (
-        final["prompt_support"].astype(int).le(2)
-        & ~final["taxonomy_label"].isin(
-            {"legitimate_pedagogy", "genuine_contrast", "non_ocn_negation"}
-        )
-    )
+    final = add_semantic_outcomes(final)
     final["adjudication_status"] = np.where(
         final["adjudication_required"], "resolved_disagreement", "confirmed_or_refined"
     )
     return final
+
+
+def add_semantic_outcomes(
+    frame: pd.DataFrame,
+    taxonomy_column: str = "taxonomy_label",
+    prompt_support_column: str = "prompt_support",
+) -> pd.DataFrame:
+    result = frame.copy()
+    labels = result[taxonomy_column].astype(str)
+    result["strict_misuse"] = labels.isin(STRICT_MISUSE_LABELS)
+    result["broad_misuse"] = labels.isin(BROAD_MISUSE_LABELS)
+    result["unsupported_contrast"] = (
+        result[prompt_support_column].astype(int).le(2)
+        & ~labels.isin({"legitimate_pedagogy", "genuine_contrast", "non_ocn_negation"})
+    )
+    return result
 
 
 def weighted_rate(frame: pd.DataFrame, outcome: str, weight: str = "sample_weight") -> float:
