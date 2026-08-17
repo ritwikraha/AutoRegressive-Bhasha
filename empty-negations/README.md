@@ -263,17 +263,17 @@ The semantic dataset has 356 rows in each of the `sample`, `annotator_a`, `annot
 
 ### Main Result Dashboard
 
-![Main analysis dashboard](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/empty-negations/docs/assets/figures/06_analysis_dashboard.png?raw=1)
+![Main analysis dashboard](./images/analysis-dashboard.png)
 
-[Open the main analysis dashboard in the repository](docs/assets/figures/06_analysis_dashboard.png)
+[Open the main analysis dashboard in the repository](./images/analysis-dashboard.png)
 
 Source: [W&B analysis run `boihq6og`](https://wandb.ai/ritwik/ocn-empty-negations/runs/boihq6og). The same PNG is saved in Drive by notebook `06`.
 
 ### Prompt Distribution
 
-![Prompt distribution](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/empty-negations/docs/assets/figures/01_prompt_dataset_counts.png?raw=1)
+![Prompt distribution](./images/prompt-dataset-counts.png)
 
-[Open the prompt distribution figure in the repository](docs/assets/figures/01_prompt_dataset_counts.png)
+[Open the prompt distribution figure in the repository](./images/prompt-dataset-counts.png)
 
 The prompt set is not balanced by topic because some source topics support more controlled combinations. The regression controls for category and the estimates cluster by prompt.
 
@@ -292,9 +292,9 @@ The raw detector found 768 candidate rows and 844 constructions in 9,504 stored 
 | Gemma 4 E2B Base | Temp. 0.7 | 1,188 | 2.36% | 1.52%-3.28% |
 | Gemma 4 E2B Base | Greedy | 594 | 1.35% | 0.51%-2.36% |
 
-![Lexical OCN rates](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/empty-negations/docs/assets/figures/03_lexical_ocn_rates.png?raw=1)
+![Lexical OCN rates](./images/lexical-ocn-rates.png)
 
-[Open the lexical OCN figure in the repository](docs/assets/figures/03_lexical_ocn_rates.png)
+[Open the lexical OCN figure in the repository](./images/lexical-ocn-rates.png)
 
 #### Prompt Trends
 
@@ -360,9 +360,9 @@ Notebook `04` considered 593 unique candidate responses. It accepted 472 pairs, 
 | Gemma 4 E2B-it | 128 | 114 |
 | Gemma 4 E2B Base | 36 | 23 |
 
-![Reward-pair quality](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/empty-negations/docs/assets/figures/04_reward_pair_quality.png?raw=1)
+![Reward-pair quality](./images/reward-pair-quality.png)
 
-[Open the reward-pair figure in the repository](docs/assets/figures/04_reward_pair_quality.png)
+[Open the reward-pair figure in the repository](./images/reward-pair-quality.png)
 
 This is a dataset-construction result. It is not yet evidence that a reward model prefers OCN.
 
@@ -388,9 +388,9 @@ The panel sampled 310 unique responses containing 356 spans from a population of
 
 Taxonomy agreement between the first two models is 8.15%. Cohen's kappa is 0.002. They disagree strongly even though all three models use the same codebook. The Qwen estimate must be treated as a sensitivity result, not a prevalence claim.
 
-![Semantic annotation dashboard](https://github.com/ritwikraha/AutoRegressive-Bhasha/blob/main/empty-negations/docs/assets/figures/05_semantic_annotation_dashboard.png?raw=1)
+![Semantic annotation dashboard](./images/semantic-annotation-dashboard.png)
 
-[Open the semantic annotation figure in the repository](docs/assets/figures/05_semantic_annotation_dashboard.png)
+[Open the semantic annotation figure in the repository](./images/semantic-annotation-dashboard.png)
 
 ### Google Drive Outputs
 
