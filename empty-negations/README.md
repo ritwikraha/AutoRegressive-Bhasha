@@ -35,11 +35,13 @@ Run these in order:
    Runs the lexical OCN detector, saves scored generations, publishes the candidate dataset to Hugging Face, and logs charts to W&B.
 5. `04_create_reward_pair_dataset.ipynb`
    Uses Qwen 3.5 2B with a Gemma 4 E2B-it fallback on an L4 to create resumable direct-affirmative rewrites of real OCN candidates from notebook `03`, filters for detector separation and content retention, saves audit artifacts to Drive, and publishes blinded pairs to Hugging Face.
-6. `05_analysis_and_reporting.ipynb`
-   Computes OCN rates, grouped tables, logistic regression, and report figures. Saves tables/plots to Drive and logs them to W&B.
-7. `06_optional_reward_model_scoring.ipynb`
+6. `05_annotation_sampling_and_adjudication.ipynb`
+   Collapses duplicate candidates, samples unique responses within each model-by-decoding stratum, annotates every selected span with two independent open-weight models, adjudicates every item with a third model on an A100, autosaves checkpoints to Drive, publishes the semantic dataset to Hugging Face, and creates two blinded human-audit packets.
+7. `06_analysis_and_reporting.ipynb`
+   Computes lexical OCN rates, weighted semantic misuse rates, grouped tables, logistic regression, and report figures. Saves tables/plots to Drive and logs them to W&B.
+8. `07_optional_reward_model_scoring.ipynb`
    Scores reward pairs with an open reward model and publishes the score dataset.
-8. `07_optional_lora_style_intervention.ipynb`
+9. `08_optional_lora_style_intervention.ipynb`
    Runs a small Qwen LoRA SFT intervention for plain-vs-OCN style acquisition.
 
 Required Colab secrets:
@@ -59,6 +61,7 @@ The setup notebook derives Hugging Face dataset repo names from your authenticat
 <user>/ocn-empty-negations-detection-main-gemma4-qwen35
 <user>/ocn-empty-negations-reward-pairs-main-gemma4-qwen35
 <user>/ocn-empty-negations-reward-scores-main-gemma4-qwen35
+<user>/ocn-empty-negations-semantic-main-gemma4-qwen35
 <user>/ocn-empty-negations-reward-pairs
 <user>/ocn-empty-negations-reward-scores
 ```
@@ -70,6 +73,8 @@ All notebooks autosave artifacts under:
 ```
 
 Notebook `02` keeps the completed Qwen 2.5 pilot dataset separate from the main Gemma 4/Qwen 3.5 dataset. The Gemma 4 checkpoints are public Apache 2.0 models and require no separate access request. Before the main run, start a fresh Colab A100 runtime and rerun notebook `00` so the pinned Transformers version is installed.
+
+Notebook `05` uses Mistral 7B Instruct and OLMo 2 13B Instruct as independent annotators, then Qwen 3 14B as the adjudicator. All three run sequentially in BF16 on an A100, with no 4-bit dependency. Its published labels are explicitly model-assisted. Complete the two human-audit CSV packets saved to Drive before describing semantic labels as human-validated in a paper.
 
 ## Quick Start
 

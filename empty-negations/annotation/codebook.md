@@ -72,3 +72,15 @@ Start with two annotators per example. Send examples to adjudication when:
 - prompt support differs by two or more points;
 - negation_adds_meaning differs by two or more points;
 - either annotator marks `unclear`.
+
+For the model-assisted dataset, use two independently prompted open-weight model annotators and preserve their raw outputs. A third model should review every item, not only flagged disagreements, so every final text span and ordinal rating has an explicit adjudicated source. Report model-model agreement separately from human agreement.
+
+For paper validation, draw a blinded audit sample that overrepresents flagged disagreements. Give the same items to two independent human annotators in different random orders, adjudicate using the rules above, and never describe model-panel labels as human annotations before that audit is complete.
+
+## Derived Outcomes
+
+- `strict_misuse`: `empty_intensification`, `scope_inflation`, or `false_correction`.
+- `broad_misuse`: strict misuse plus `presupposed_contrast` and `template_stacking`.
+- `unsupported_contrast`: `prompt_support <= 2`, excluding `genuine_contrast`, `legitimate_pedagogy`, and `non_ocn_negation`.
+
+Keep all three outcomes separate. The broad definition includes genuinely ambiguous cases and should be reported as a sensitivity analysis, not substituted for the strict primary measure.

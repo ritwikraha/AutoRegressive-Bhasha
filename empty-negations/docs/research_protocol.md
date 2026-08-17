@@ -73,6 +73,7 @@ Why do instruction-tuned language models disproportionately use contrastive nega
 - Information confound: the second clause may add real content.
 - Topic confound: abstract topics invite contrast more than procedural tasks.
 - Detector overreach: lexical matches are not necessarily misuse.
+- Model-annotation circularity: open-weight annotators may share stylistic priors with evaluated models; validate a blinded disagreement-enriched sample with two humans.
 - Base-model comparability: base models may fail direct instruction.
 - Judge circularity: LLM judges may share the bias under study.
 - English-only scope: cross-lingual conclusions require separate validation.

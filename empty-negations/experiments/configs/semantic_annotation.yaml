@@ -1,0 +1,48 @@
+name: ocn_semantic_annotations_main_gemma4_qwen35
+description: Stratified span-level semantic annotation and three-model adjudication of lexical OCN candidates.
+
+source_dataset: ritwikraha/ocn-empty-negations-detection-main-gemma4-qwen35
+output_dataset: ritwikraha/ocn-empty-negations-semantic-main-gemma4-qwen35
+required_gpu: NVIDIA A100
+precision: bfloat16
+quantize_4bit: false
+
+sampling:
+  unit: unique response within prompt, model, and decoding
+  annotation_unit: detected span
+  strata: [model_id, decoding]
+  target_responses_per_stratum: 50
+  seed: 20260817
+  retain_all_spans_in_sampled_responses: true
+
+annotators:
+  - annotator_id: annotator_a
+    model_id: mistralai/Mistral-7B-Instruct-v0.3
+  - annotator_id: annotator_b
+    model_id: allenai/OLMo-2-1124-13B-Instruct
+
+adjudicator:
+  model_id: Qwen/Qwen3-14B
+  adjudicate_all: true
+
+generation:
+  temperature: 0.0
+  max_new_tokens: 384
+  batch_size: 8
+  max_parse_attempts: 3
+
+human_validation:
+  audit_sample_size: 100
+  seed: 20260818
+  required_for_paper_claims: true
+
+outputs:
+  population: ocn_semantic_span_population_main_gemma4_qwen35.csv
+  sample: ocn_semantic_annotation_sample_main_gemma4_qwen35.csv
+  annotator_a: ocn_semantic_annotations_a_main_gemma4_qwen35.csv
+  annotator_b: ocn_semantic_annotations_b_main_gemma4_qwen35.csv
+  adjudications: ocn_semantic_adjudications_main_gemma4_qwen35.csv
+  final: ocn_semantic_adjudicated_main_gemma4_qwen35.csv
+  agreement: ocn_semantic_agreement_main_gemma4_qwen35.csv
+  human_audit: ocn_semantic_human_audit_main_gemma4_qwen35.csv
+

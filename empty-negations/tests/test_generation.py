@@ -33,6 +33,16 @@ class FakeProcessor:
         return {"input_ids": [[4, 5, 6]]}
 
 
+class FakeChatTokenizer(FakeTokenizer):
+    def __init__(self):
+        super().__init__()
+        self.chat_kwargs = None
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.chat_kwargs = {"messages": messages, **kwargs}
+        return {"input_ids": [[4, 5, 6]]}
+
+
 def test_model_spec_defaults_to_causal_loader():
     spec = ModelSpec("example/model", "example", "base")
     assert spec.loader_type == "causal_lm"
@@ -79,6 +89,17 @@ def test_post_trained_batch_disables_thinking():
     ]
     assert processor.chat_kwargs["enable_thinking"] is False
     assert processor.chat_kwargs["processor_kwargs"] == {"padding": True}
+
+
+def test_causal_tokenizer_chat_batch_uses_direct_padding():
+    tokenizer = FakeChatTokenizer()
+    prompts = ["First", "Second"]
+
+    prepare_text_batch_inputs(tokenizer, prompts, True)
+
+    assert tokenizer.chat_kwargs["padding"] is True
+    assert "processor_kwargs" not in tokenizer.chat_kwargs
+    assert tokenizer.chat_kwargs["enable_thinking"] is False
 
 
 def test_generation_rows_batches_and_reuses_greedy_output(monkeypatch):

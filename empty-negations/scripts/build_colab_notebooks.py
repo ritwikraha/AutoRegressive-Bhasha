@@ -146,6 +146,7 @@ def setup_notebook() -> list[dict]:
                 "hf_main_detection_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-detection-main-gemma4-qwen35",
                 "hf_main_reward_pairs_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-reward-pairs-main-gemma4-qwen35",
                 "hf_main_reward_scores_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-reward-scores-main-gemma4-qwen35",
+                "hf_main_semantic_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-semantic-main-gemma4-qwen35",
                 "hf_reward_pairs_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-reward-pairs",
                 "hf_reward_scores_repo": f"{HF_OWNER}/{HF_DATASET_PREFIX}-reward-scores",
                 "drive_project_root": str(paths.project_root),
@@ -1008,13 +1009,515 @@ def reward_pairs_notebook() -> list[dict]:
     ]
 
 
+def semantic_annotation_notebook() -> list[dict]:
+    return [
+        md(
+            """
+            # 05 - Sample, Annotate, And Adjudicate OCN Semantics
+
+            This notebook turns lexical detector matches into a semantic research dataset. It collapses duplicate greedy generations, samples responses within every model-by-decoding stratum, annotates every detected span with two independent open-weight models, and has a third open-weight model adjudicate every item. Checkpoints are resumable on Google Drive, final splits are published to Hugging Face, and agreement and prevalence diagnostics are logged to W&B.
+
+            Required runtime: an A100 GPU. The three models run sequentially in BF16, so this notebook does not use bitsandbytes or 4-bit quantization. The resulting labels are model-assisted annotations, not human gold labels. A blinded 100-item, two-annotator human audit packet is created for paper validation.
+            """
+        ),
+        code(COMMON_BOOTSTRAP),
+        code(
+            r"""
+            import gc
+            import json
+            import os
+            from pathlib import Path
+
+            import matplotlib.pyplot as plt
+            import numpy as np
+            import pandas as pd
+            import seaborn as sns
+            import torch
+            import wandb
+            from datasets import Dataset, load_dataset
+            from huggingface_hub import HfApi
+
+            from ocn.annotation import (
+                ANNOTATION_FIELDS,
+                agreement_summary,
+                build_span_population,
+                compare_annotations,
+                finalize_adjudications,
+                make_adjudication_prompt,
+                make_annotation_packet,
+                make_annotation_prompt,
+                parse_annotation_json,
+                stratified_response_sample,
+                validate_annotation_frame,
+                weighted_rate,
+            )
+            from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, save_dataframe, utc_timestamp
+            from ocn.generation import DecodingSpec, generate_batch, load_text_generation_model
+
+            if not torch.cuda.is_available():
+                raise RuntimeError("Notebook 05 requires an A100 GPU runtime in Colab.")
+            GPU_NAME = torch.cuda.get_device_name(0)
+            if "A100" not in GPU_NAME.upper():
+                raise RuntimeError(
+                    f"Notebook 05 requires an A100, but Colab assigned {GPU_NAME}. "
+                    "Reconnect with Runtime > Change runtime type > A100 GPU."
+                )
+            print("Verified accelerator:", GPU_NAME)
+
+            paths = make_colab_paths()
+            config = json.loads((paths.project_root / "ocn_colab_config.json").read_text())
+            HF_TOKEN = login_huggingface("HF_WRITE_ACCESS")
+            EXPERIMENT_ID = "main_gemma4_qwen35"
+            ANNOTATION_RUN_ID = utc_timestamp()
+            MAIN_DETECTION_REPO = config.get(
+                "hf_main_detection_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-detection-main-gemma4-qwen35",
+            )
+            MAIN_SEMANTIC_REPO = config.get(
+                "hf_main_semantic_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-semantic-main-gemma4-qwen35",
+            )
+
+            TARGET_RESPONSES_PER_STRATUM = int(os.environ.get("OCN_ANNOTATION_STRATUM_N", "50"))
+            SAMPLE_SEED = 20260817
+            HUMAN_AUDIT_N = 100
+            HUMAN_AUDIT_SEED = 20260818
+            BATCH_SIZE = int(os.environ.get("OCN_ANNOTATION_BATCH_SIZE", "8"))
+            MAX_PARSE_ATTEMPTS = 3
+            ADJUDICATE_ALL = True
+
+            ANNOTATOR_SPECS = [
+                {
+                    "annotator_id": "annotator_a",
+                    "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+                    "loader_type": "causal_lm",
+                },
+                {
+                    "annotator_id": "annotator_b",
+                    "model_id": "allenai/OLMo-2-1124-13B-Instruct",
+                    "loader_type": "causal_lm",
+                },
+            ]
+            ADJUDICATOR_SPEC = {
+                "annotator_id": "adjudicator",
+                "model_id": "Qwen/Qwen3-14B",
+                "loader_type": "causal_lm",
+            }
+            decoding = DecodingSpec(
+                "semantic_annotation_greedy",
+                temperature=0.0,
+                top_p=1.0,
+                max_new_tokens=384,
+            )
+
+            annotation_config = {
+                **config,
+                "experiment_id": EXPERIMENT_ID,
+                "annotation_run_id": ANNOTATION_RUN_ID,
+                "source_repo": MAIN_DETECTION_REPO,
+                "output_repo": MAIN_SEMANTIC_REPO,
+                "gpu_name": GPU_NAME,
+                "precision": "bfloat16",
+                "quantize_4bit": False,
+                "target_responses_per_stratum": TARGET_RESPONSES_PER_STRATUM,
+                "sample_seed": SAMPLE_SEED,
+                "batch_size": BATCH_SIZE,
+                "max_parse_attempts": MAX_PARSE_ATTEMPTS,
+                "annotator_models": [spec["model_id"] for spec in ANNOTATOR_SPECS],
+                "adjudicator_model": ADJUDICATOR_SPEC["model_id"],
+                "adjudicate_all": ADJUDICATE_ALL,
+            }
+            run = login_wandb(
+                project="ocn-empty-negations",
+                name=f"semantic-annotation-{EXPERIMENT_ID}-{ANNOTATION_RUN_ID}",
+                config=annotation_config,
+            )
+            sns.set_theme(style="whitegrid")
+            """
+        ),
+        code(
+            r"""
+            detections = load_dataset(MAIN_DETECTION_REPO, split="train").to_pandas()
+            population = build_span_population(detections)
+            sample = stratified_response_sample(
+                population,
+                target_responses_per_stratum=TARGET_RESPONSES_PER_STRATUM,
+                strata=("model_id", "decoding"),
+                seed=SAMPLE_SEED,
+            )
+
+            population_path = save_dataframe(
+                population,
+                Path(config["drive_data_root"]) / "ocn_semantic_span_population_main_gemma4_qwen35.csv",
+            )
+            sample_path = save_dataframe(
+                sample,
+                Path(config["drive_data_root"]) / "ocn_semantic_annotation_sample_main_gemma4_qwen35.csv",
+            )
+            response_allocation = (
+                sample.drop_duplicates("response_id")
+                .groupby(["model_id", "decoding"], dropna=False)
+                .agg(
+                    population_responses=("stratum_population_responses", "first"),
+                    sampled_responses=("response_id", "size"),
+                )
+                .reset_index()
+            )
+            span_allocation = (
+                sample.groupby(["model_id", "decoding"], dropna=False)
+                .size()
+                .rename("sampled_spans")
+                .reset_index()
+            )
+            allocation = response_allocation.merge(
+                span_allocation,
+                on=["model_id", "decoding"],
+                validate="one_to_one",
+            )
+            print("Detection rows:", len(detections))
+            print("Lexical candidate rows:", int(detections["has_ocn"].sum()))
+            print("Unique candidate responses:", population["response_id"].nunique())
+            print("Candidate spans:", len(population))
+            print("Sampled responses:", sample["response_id"].nunique())
+            print("Sampled spans:", len(sample))
+            display(allocation)
+            """
+        ),
+        code(
+            r"""
+            checkpoint_root = Path(config["drive_data_root"]) / "semantic_annotation_runs" / EXPERIMENT_ID
+            checkpoint_root.mkdir(parents=True, exist_ok=True)
+
+            def checkpoint_path_for(annotator_id):
+                return checkpoint_root / f"{annotator_id}.csv"
+
+            def load_checkpoint(annotator_id):
+                path = checkpoint_path_for(annotator_id)
+                if not path.exists():
+                    return pd.DataFrame()
+                frame = pd.read_csv(path, dtype={"example_id": str})
+                if "attempt" in frame.columns:
+                    frame["attempt"] = frame["attempt"].astype(int)
+                return frame
+
+            def completed_annotations(checkpoint, expected_ids):
+                if checkpoint.empty or "parse_ok" not in checkpoint.columns:
+                    return pd.DataFrame()
+                parse_ok = checkpoint["parse_ok"].astype(str).str.lower().eq("true")
+                valid = checkpoint[parse_ok].copy()
+                valid = valid.sort_values("attempt").drop_duplicates("example_id", keep="last")
+                valid = valid[valid["example_id"].isin(expected_ids)]
+                return valid
+
+            def run_model_annotations(items, spec, prompt_builder):
+                annotator_id = spec["annotator_id"]
+                expected_ids = set(items["example_id"])
+                checkpoint = load_checkpoint(annotator_id)
+                completed = completed_annotations(checkpoint, expected_ids)
+                pending_ids = expected_ids - set(completed.get("example_id", []))
+                print(f"{annotator_id}: recovered {len(completed)}, pending {len(pending_ids)}")
+                if not pending_ids:
+                    return validate_annotation_frame(completed, expected_ids)
+
+                print("Loading", spec["model_id"])
+                processor, model = load_text_generation_model(
+                    spec["model_id"],
+                    quantize_4bit=False,
+                    loader_type=spec["loader_type"],
+                )
+                model_revision = getattr(model.config, "_commit_hash", None)
+
+                try:
+                    for attempt in range(1, MAX_PARSE_ATTEMPTS + 1):
+                        completed = completed_annotations(checkpoint, expected_ids)
+                        pending_ids = expected_ids - set(completed.get("example_id", []))
+                        if not pending_ids:
+                            break
+                        pending = items[items["example_id"].isin(pending_ids)].copy()
+                        previous_output = {}
+                        if not checkpoint.empty:
+                            previous = checkpoint[checkpoint["example_id"].isin(pending_ids)]
+                            previous = previous.sort_values("attempt").drop_duplicates("example_id", keep="last")
+                            previous_output = dict(zip(previous["example_id"], previous["raw_model_output"]))
+
+                        print(f"{annotator_id}: attempt {attempt}, {len(pending)} pending")
+                        records = pending.to_dict("records")
+                        for start in range(0, len(records), BATCH_SIZE):
+                            batch = records[start : start + BATCH_SIZE]
+                            prompts = []
+                            for record in batch:
+                                base_prompt = prompt_builder(record)
+                                invalid = previous_output.get(record["example_id"])
+                                if invalid:
+                                    base_prompt = (
+                                        "The previous response below was invalid. Return only a corrected JSON "
+                                        "object for the original request, with no Markdown.\n\nORIGINAL REQUEST:\n"
+                                        + base_prompt
+                                        + "\n\nINVALID RESPONSE:\n"
+                                        + str(invalid)[:3000]
+                                    )
+                                prompts.append(base_prompt)
+                            outputs = generate_batch(
+                                tokenizer=processor,
+                                model=model,
+                                prompts=prompts,
+                                decoding=decoding,
+                                use_chat_template=True,
+                                seed=SAMPLE_SEED + attempt,
+                            )
+                            new_rows = []
+                            for record, output in zip(batch, outputs):
+                                row = {
+                                    "example_id": record["example_id"],
+                                    "annotator_id": annotator_id,
+                                    "annotator_type": "open_weight_model",
+                                    "annotator_model_id": spec["model_id"],
+                                    "model_revision": model_revision,
+                                    "annotation_run_id": ANNOTATION_RUN_ID,
+                                    "attempt": attempt,
+                                    "raw_model_output": output,
+                                    "parse_ok": False,
+                                    "parse_error": "",
+                                }
+                                try:
+                                    row.update(parse_annotation_json(output))
+                                    row["parse_ok"] = True
+                                except Exception as exc:
+                                    row["parse_error"] = str(exc)
+                                new_rows.append(row)
+                            checkpoint = pd.concat(
+                                [checkpoint, pd.DataFrame(new_rows)], ignore_index=True
+                            )
+                            save_dataframe(checkpoint, checkpoint_path_for(annotator_id))
+                            wandb.log({
+                                f"{annotator_id}/checkpoint_rows": len(checkpoint),
+                                f"{annotator_id}/completed": len(completed_annotations(checkpoint, expected_ids)),
+                            })
+                            print(
+                                f"{annotator_id}: {len(completed_annotations(checkpoint, expected_ids))}/"
+                                f"{len(expected_ids)} valid"
+                            )
+                finally:
+                    model = None
+                    processor = None
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+                completed = completed_annotations(checkpoint, expected_ids)
+                if len(completed) != len(expected_ids):
+                    failed = sorted(expected_ids - set(completed["example_id"]))
+                    raise RuntimeError(
+                        f"{annotator_id} still has {len(failed)} parse failures after "
+                        f"{MAX_PARSE_ATTEMPTS} attempts. Checkpoint is preserved at "
+                        f"{checkpoint_path_for(annotator_id)}."
+                    )
+                return validate_annotation_frame(completed, expected_ids)
+            """
+        ),
+        code(
+            r"""
+            annotation_frames = {}
+            for spec in ANNOTATOR_SPECS:
+                annotation_frames[spec["annotator_id"]] = run_model_annotations(
+                    sample,
+                    spec,
+                    make_annotation_prompt,
+                )
+
+            annotation_a = annotation_frames["annotator_a"]
+            annotation_b = annotation_frames["annotator_b"]
+            comparison = compare_annotations(sample, annotation_a, annotation_b)
+            agreement = agreement_summary(comparison)
+            disagreement_count = int(comparison["adjudication_required"].sum())
+            print("Flagged disagreements:", disagreement_count, "/", len(comparison))
+            display(agreement)
+            """
+        ),
+        code(
+            r"""
+            adjudication_items = comparison if ADJUDICATE_ALL else comparison[
+                comparison["adjudication_required"]
+            ]
+            adjudications = run_model_annotations(
+                adjudication_items,
+                ADJUDICATOR_SPEC,
+                make_adjudication_prompt,
+            )
+            final = finalize_adjudications(
+                comparison,
+                adjudications,
+                adjudicate_all=ADJUDICATE_ALL,
+            )
+            final["annotator_a_model_id"] = ANNOTATOR_SPECS[0]["model_id"]
+            final["annotator_b_model_id"] = ANNOTATOR_SPECS[1]["model_id"]
+            final["adjudicator_model_id"] = ADJUDICATOR_SPEC["model_id"]
+            final["annotation_run_id"] = ANNOTATION_RUN_ID
+
+            semantic_rate_rows = []
+            for key, group in final.groupby(
+                ["model_id", "model_stage", "decoding"], dropna=False
+            ):
+                semantic_rate_rows.append(
+                    {
+                        "model_id": key[0],
+                        "model_stage": key[1],
+                        "decoding": key[2],
+                        "sampled_spans": len(group),
+                        "weighted_strict_misuse_rate": weighted_rate(group, "strict_misuse"),
+                        "weighted_broad_misuse_rate": weighted_rate(group, "broad_misuse"),
+                        "weighted_unsupported_contrast_rate": weighted_rate(group, "unsupported_contrast"),
+                    }
+                )
+            semantic_rates = pd.DataFrame(semantic_rate_rows)
+            display(semantic_rates)
+            """
+        ),
+        code(
+            r"""
+            final_path = save_dataframe(
+                final,
+                Path(config["drive_data_root"]) / "ocn_semantic_adjudicated_main_gemma4_qwen35.csv",
+            )
+            agreement_path = save_dataframe(
+                agreement,
+                Path(config["drive_data_root"]) / "ocn_semantic_agreement_main_gemma4_qwen35.csv",
+            )
+            annotation_a_path = save_dataframe(
+                annotation_a,
+                Path(config["drive_data_root"]) / "ocn_semantic_annotations_a_main_gemma4_qwen35.csv",
+            )
+            annotation_b_path = save_dataframe(
+                annotation_b,
+                Path(config["drive_data_root"]) / "ocn_semantic_annotations_b_main_gemma4_qwen35.csv",
+            )
+            adjudication_path = save_dataframe(
+                adjudications,
+                Path(config["drive_data_root"]) / "ocn_semantic_adjudications_main_gemma4_qwen35.csv",
+            )
+
+            audit_n = min(HUMAN_AUDIT_N, len(final))
+            disagreement_pool = final[final["adjudication_required"]]
+            priority_n = min(len(disagreement_pool), audit_n // 2)
+            priority = disagreement_pool.sample(n=priority_n, random_state=HUMAN_AUDIT_SEED)
+            remainder = final[~final["example_id"].isin(priority["example_id"])]
+            remainder = remainder.sample(
+                n=audit_n - priority_n,
+                random_state=HUMAN_AUDIT_SEED + 1,
+            )
+            human_audit_source = pd.concat([priority, remainder], ignore_index=True)
+            human_audit_a = make_annotation_packet(
+                human_audit_source,
+                packet_id="human_audit_a",
+                seed=HUMAN_AUDIT_SEED + 2,
+            )
+            human_audit_b = make_annotation_packet(
+                human_audit_source,
+                packet_id="human_audit_b",
+                seed=HUMAN_AUDIT_SEED + 3,
+            )
+            human_audit_a_path = save_dataframe(
+                human_audit_a,
+                Path(config["drive_data_root"]) / "ocn_semantic_human_audit_a_main_gemma4_qwen35.csv",
+            )
+            human_audit_b_path = save_dataframe(
+                human_audit_b,
+                Path(config["drive_data_root"]) / "ocn_semantic_human_audit_b_main_gemma4_qwen35.csv",
+            )
+
+            public_audit = human_audit_source[
+                ["example_id", "prompt", "response", "span_text", "model_id", "decoding"]
+            ].copy()
+            hub_configs = {
+                "sample": sample,
+                "annotator_a": annotation_a,
+                "annotator_b": annotation_b,
+                "adjudicated": final,
+                "agreement": agreement,
+                "human_audit": public_audit,
+            }
+            for config_name, frame in hub_configs.items():
+                Dataset.from_pandas(frame, preserve_index=False).push_to_hub(
+                    MAIN_SEMANTIC_REPO,
+                    config_name=config_name,
+                    split="train",
+                    private=config["hf_private"],
+                    token=HF_TOKEN,
+                    commit_message=(
+                        f"Publish {config_name} semantic annotations {ANNOTATION_RUN_ID}"
+                    ),
+                )
+            HfApi(token=HF_TOKEN).upload_file(
+                path_or_fileobj=str(REPO_ROOT / "dataset_cards/ocn_semantic.md"),
+                path_in_repo="README.md",
+                repo_id=MAIN_SEMANTIC_REPO,
+                repo_type="dataset",
+                commit_message="Add semantic annotation dataset card",
+            )
+
+            fig, axes = plt.subplots(1, 3, figsize=(19, 6))
+            final["taxonomy_label"].value_counts().sort_values().plot(
+                kind="barh", ax=axes[0], color="#4c78a8"
+            )
+            axes[0].set_title("Adjudicated taxonomy")
+            agreement.plot(
+                x="field", y="cohen_kappa", kind="bar", ax=axes[1], color="#f58518", legend=False
+            )
+            axes[1].set_title("Inter-model agreement")
+            axes[1].set_ylim(-0.1, 1)
+            axes[1].tick_params(axis="x", rotation=60)
+            rate_plot = semantic_rates.melt(
+                id_vars=["model_id", "model_stage", "decoding", "sampled_spans"],
+                value_vars=[
+                    "weighted_strict_misuse_rate",
+                    "weighted_broad_misuse_rate",
+                    "weighted_unsupported_contrast_rate",
+                ],
+                var_name="metric",
+                value_name="rate",
+            )
+            sns.barplot(data=rate_plot, y="model_id", x="rate", hue="metric", ax=axes[2])
+            axes[2].set_title("Weighted semantic rates")
+            axes[2].set_xlim(0, 1)
+            plt.tight_layout()
+            figure_path = Path(config["drive_figure_root"]) / "05_semantic_annotation_main_gemma4_qwen35.png"
+            fig.savefig(figure_path, dpi=180, bbox_inches="tight")
+
+            wandb.log({
+                "population_responses": population["response_id"].nunique(),
+                "population_spans": len(population),
+                "sample_responses": sample["response_id"].nunique(),
+                "sample_spans": len(sample),
+                "flagged_disagreements": disagreement_count,
+                "flagged_disagreement_rate": disagreement_count / len(comparison),
+                "weighted_strict_misuse_rate": weighted_rate(final, "strict_misuse"),
+                "weighted_broad_misuse_rate": weighted_rate(final, "broad_misuse"),
+                "weighted_unsupported_contrast_rate": weighted_rate(final, "unsupported_contrast"),
+                "sampling_allocation": wandb.Table(dataframe=allocation),
+                "agreement": wandb.Table(dataframe=agreement),
+                "semantic_rates": wandb.Table(dataframe=semantic_rates),
+                "adjudicated_sample": wandb.Table(dataframe=final),
+                "semantic_annotation_dashboard": wandb.Image(str(figure_path)),
+            })
+            run.finish()
+
+            print("Saved sample:", sample_path)
+            print("Saved final annotations:", final_path)
+            print("Saved agreement:", agreement_path)
+            print("Human audit packets:", human_audit_a_path, human_audit_b_path)
+            print("Published:", f"https://huggingface.co/datasets/{MAIN_SEMANTIC_REPO}")
+            print("Figure:", figure_path)
+            """
+        ),
+    ]
+
+
 def analysis_notebook() -> list[dict]:
     return [
         md(
             """
-            # 05 - Analysis And Reporting
+            # 06 - Analysis And Reporting
 
-            This notebook loads the detection dataset, computes model/category/persona effects, saves report tables and plots to Google Drive, and logs them to W&B.
+            This notebook loads both lexical detections and adjudicated semantic labels, computes model/category/persona effects and weighted semantic misuse estimates, saves report tables and plots to Google Drive, and logs them to W&B.
             """
         ),
         code(COMMON_BOOTSTRAP),
@@ -1029,6 +1532,7 @@ def analysis_notebook() -> list[dict]:
             import wandb
             from datasets import load_dataset
 
+            from ocn.annotation import weighted_rate
             from ocn.colab_utils import login_huggingface, login_wandb, make_colab_paths, save_dataframe, utc_timestamp
             from ocn.metrics import detection_summary, grouped_ocn_rates, top_patterns
 
@@ -1041,11 +1545,16 @@ def analysis_notebook() -> list[dict]:
                 "hf_main_detection_repo",
                 f"{config['hf_owner']}/ocn-empty-negations-detection-main-gemma4-qwen35",
             )
+            MAIN_SEMANTIC_REPO = config.get(
+                "hf_main_semantic_repo",
+                f"{config['hf_owner']}/ocn-empty-negations-semantic-main-gemma4-qwen35",
+            )
             analysis_config = {
                 **config,
                 "experiment_id": EXPERIMENT_ID,
                 "analysis_run_id": ANALYSIS_RUN_ID,
-                "source_repo": MAIN_DETECTION_REPO,
+                "detection_repo": MAIN_DETECTION_REPO,
+                "semantic_repo": MAIN_SEMANTIC_REPO,
             }
             run = login_wandb(
                 project="ocn-empty-negations",
@@ -1058,11 +1567,29 @@ def analysis_notebook() -> list[dict]:
         code(
             r"""
             df = load_dataset(MAIN_DETECTION_REPO, split="train").to_pandas()
+            semantics = load_dataset(
+                MAIN_SEMANTIC_REPO, "adjudicated", split="train"
+            ).to_pandas()
             summary = detection_summary(df)
             model_rates = grouped_ocn_rates(df, ["model_id", "model_stage", "decoding"])
             prompt_rates = grouped_ocn_rates(df, ["category", "variant", "persona"])
+            semantic_rate_rows = []
+            for key, group in semantics.groupby(
+                ["model_id", "model_stage", "decoding"], dropna=False
+            ):
+                semantic_rate_rows.append({
+                    "model_id": key[0],
+                    "model_stage": key[1],
+                    "decoding": key[2],
+                    "sampled_spans": len(group),
+                    "weighted_strict_misuse_rate": weighted_rate(group, "strict_misuse"),
+                    "weighted_broad_misuse_rate": weighted_rate(group, "broad_misuse"),
+                    "weighted_unsupported_contrast_rate": weighted_rate(group, "unsupported_contrast"),
+                })
+            semantic_rates = pd.DataFrame(semantic_rate_rows)
             save_dataframe(model_rates, Path(config["drive_data_root"]) / "report_model_rates_main_gemma4_qwen35.csv")
             save_dataframe(prompt_rates, Path(config["drive_data_root"]) / "report_prompt_rates_main_gemma4_qwen35.csv")
+            save_dataframe(semantic_rates, Path(config["drive_data_root"]) / "report_semantic_rates_main_gemma4_qwen35.csv")
             summary
             """
         ),
@@ -1079,7 +1606,7 @@ def analysis_notebook() -> list[dict]:
         ),
         code(
             r"""
-            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            fig, axes = plt.subplots(2, 3, figsize=(21, 12))
             sns.barplot(data=model_rates, y="model_id", x="ocn_rate", hue="decoding", ax=axes[0, 0])
             axes[0, 0].set_title("OCN rate by model and decoding")
             axes[0, 0].set_xlim(0, 1)
@@ -1097,15 +1624,36 @@ def analysis_notebook() -> list[dict]:
             patterns = top_patterns(df, 12)
             sns.barplot(data=patterns, y="pattern", x="count", ax=axes[1, 1], color="#b279a2")
             axes[1, 1].set_title("Top detector patterns")
+
+            semantics["taxonomy_label"].value_counts().sort_values().plot(
+                kind="barh", ax=axes[0, 2], color="#e45756"
+            )
+            axes[0, 2].set_title("Adjudicated semantic taxonomy")
+
+            semantic_plot = semantic_rates.melt(
+                id_vars=["model_id", "model_stage", "decoding", "sampled_spans"],
+                value_vars=[
+                    "weighted_strict_misuse_rate",
+                    "weighted_broad_misuse_rate",
+                    "weighted_unsupported_contrast_rate",
+                ],
+                var_name="metric",
+                value_name="rate",
+            )
+            sns.barplot(data=semantic_plot, y="model_id", x="rate", hue="metric", ax=axes[1, 2])
+            axes[1, 2].set_title("Weighted semantic rates")
+            axes[1, 2].set_xlim(0, 1)
             plt.tight_layout()
 
-            fig_path = Path(config["drive_figure_root"]) / "05_analysis_dashboard_main_gemma4_qwen35.png"
+            fig_path = Path(config["drive_figure_root"]) / "06_analysis_dashboard_main_gemma4_qwen35.png"
             fig.savefig(fig_path, dpi=180, bbox_inches="tight")
             wandb.log({
                 **summary.to_dict(),
                 "analysis_dashboard": wandb.Image(str(fig_path)),
                 "model_rates": wandb.Table(dataframe=model_rates),
                 "prompt_rates": wandb.Table(dataframe=prompt_rates),
+                "semantic_rates": wandb.Table(dataframe=semantic_rates),
+                "semantic_annotations": wandb.Table(dataframe=semantics),
                 "logit_summary": model.summary().as_text(),
             })
             run.finish()
@@ -1119,7 +1667,7 @@ def reward_scoring_notebook() -> list[dict]:
     return [
         md(
             """
-            # 06 - Optional Reward Model Scoring
+            # 07 - Optional Reward Model Scoring
 
             This notebook scores matched reward-pair responses with an open reward model, saves scores to Drive, logs preference deltas to W&B, and publishes the score dataset to Hugging Face.
             """
@@ -1223,7 +1771,7 @@ def lora_notebook() -> list[dict]:
     return [
         md(
             """
-            # 07 - Optional LoRA Style Intervention
+            # 08 - Optional LoRA Style Intervention
 
             This is a compact controlled-training notebook. It builds tiny plain-vs-OCN SFT datasets from the reward-pair table, trains a LoRA adapter on Qwen 0.5B, saves outputs to Drive, and logs training to W&B.
 
@@ -1332,9 +1880,10 @@ def main() -> None:
     write_notebook("02_generate_oss_model_responses.ipynb", generation_notebook())
     write_notebook("03_detect_and_publish_ocn_dataset.ipynb", detection_notebook())
     write_notebook("04_create_reward_pair_dataset.ipynb", reward_pairs_notebook(), gpu_type="L4")
-    write_notebook("05_analysis_and_reporting.ipynb", analysis_notebook())
-    write_notebook("06_optional_reward_model_scoring.ipynb", reward_scoring_notebook())
-    write_notebook("07_optional_lora_style_intervention.ipynb", lora_notebook())
+    write_notebook("05_annotation_sampling_and_adjudication.ipynb", semantic_annotation_notebook())
+    write_notebook("06_analysis_and_reporting.ipynb", analysis_notebook())
+    write_notebook("07_optional_reward_model_scoring.ipynb", reward_scoring_notebook())
+    write_notebook("08_optional_lora_style_intervention.ipynb", lora_notebook())
 
 
 if __name__ == "__main__":
