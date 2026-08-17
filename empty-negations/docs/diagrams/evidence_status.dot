@@ -1,0 +1,15 @@
+digraph EvidenceStatus {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.35", ranksep="0.45"];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#495057", margin="0.12,0.08"];
+  edge [fontname="Helvetica", fontsize=9, color="#6C757D", arrowsize=0.7];
+
+  observed [label="Observed wording\nLexical OCN candidates", fillcolor="#D3F9D8"];
+  pragmatic [label="Meaning in context\nModel-assisted labels", fillcolor="#FFF3BF"];
+  human [label="Human-validated misuse\nTBD", fillcolor="#FFE3E3"];
+  preference [label="Reward preference\nPairs ready, scoring TBD", fillcolor="#FFE3E3"];
+  causal [label="Training or internal cause\nDPO, LoRA, probing TBD", fillcolor="#FFE3E3"];
+
+  observed -> pragmatic -> human;
+  human -> preference;
+  preference -> causal;
+}
