@@ -1,0 +1,23 @@
+digraph OCNResearchPipeline {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.35", ranksep="0.55"];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#495057", fillcolor="#F8F9FA", margin="0.12,0.08"];
+  edge [fontname="Helvetica", fontsize=9, color="#6C757D", arrowsize=0.7];
+
+  proposal [label="Research proposal\n10 hypotheses", fillcolor="#E9ECEF"];
+  prompts [label="594 controlled prompts\n12 categories, 7 variants"];
+  generation [label="9,504 generations\nGemma 4 and Qwen 3.5"];
+  detection [label="Lexical detection\n768 raw candidate rows"];
+  dedup [label="Deduplicate greedy seeds\n7,128 analysis responses"];
+  reward [label="472 matched rewrite pairs\nready for preference scoring", fillcolor="#FFF3BF"];
+  semantic [label="356 sampled spans\nthree-model panel", fillcolor="#FFF3BF"];
+  analysis [label="Clustered analysis\nlexical results complete", fillcolor="#D3F9D8"];
+  human [label="Two human audits\n100 items each", fillcolor="#FFE3E3"];
+  paper [label="Minimal viable paper", fillcolor="#FFE3E3"];
+
+  proposal -> prompts -> generation -> detection -> dedup -> analysis;
+  detection -> reward;
+  detection -> semantic -> analysis;
+  semantic -> human -> paper;
+  analysis -> paper;
+  reward -> paper [label="score first"];
+}

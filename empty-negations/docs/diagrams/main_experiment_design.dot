@@ -1,0 +1,29 @@
+digraph MainExperimentDesign {
+  graph [rankdir=LR, bgcolor="white", pad="0.25", nodesep="0.30", ranksep="0.65"];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#495057", fillcolor="#F8F9FA", margin="0.12,0.08"];
+  edge [fontname="Helvetica", fontsize=9, color="#6C757D", arrowsize=0.7];
+
+  prompts [label="594 prompts"];
+  categories [label="12 topic categories"];
+  variants [label="7 prompt variants"];
+  personas [label="3 personas"];
+  lengths [label="75 or 150 words"];
+  models [label="4 checkpoints\n2 families x base/instruct"];
+  decoding [label="2 decoding modes\ngreedy and temperature 0.7"];
+  seeds [label="2 seed labels"];
+  raw [label="9,504 stored rows", fillcolor="#D0EBFF"];
+  analysis [label="7,128 analysis rows\nafter greedy-seed dedup", fillcolor="#D3F9D8"];
+
+  prompts -> categories;
+  prompts -> variants;
+  prompts -> personas;
+  prompts -> lengths;
+  categories -> raw;
+  variants -> raw;
+  personas -> raw;
+  lengths -> raw;
+  models -> raw [label="x4"];
+  decoding -> raw [label="x2"];
+  seeds -> raw [label="x2"];
+  raw -> analysis;
+}
