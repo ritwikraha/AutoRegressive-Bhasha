@@ -140,8 +140,11 @@ def prepare_text_batch_inputs(processor, prompts: list[str], use_chat_template: 
             "return_dict": True,
             "return_tensors": "pt",
             "add_generation_prompt": True,
-            "processor_kwargs": {"padding": True},
         }
+        if processor is tokenizer:
+            kwargs["padding"] = True
+        else:
+            kwargs["processor_kwargs"] = {"padding": True}
         try:
             return processor.apply_chat_template(
                 conversations,
